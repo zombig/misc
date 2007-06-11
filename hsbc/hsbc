@@ -1,0 +1,78 @@
+#!/usr/bin/python
+
+# HSBC account balance scraper
+# Copyright (c) 2007, John Morrissey <jwm@horde.net>
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of Version 2 of the GNU General Public License as
+# published by the Free Software Foundation
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+ACCOUNT_NUM = None
+ACCOUNT_PASS = None
+ACCOUNT_PASS2 = None
+HSBC_TAB = "/var/cache/cricket/hsbc.tab"
+
+from getopt import gnu_getopt, GetoptError
+import mechanize
+from os.path import basename
+import re
+import sys
+from urllib import urlencode
+from urllib2 import Request
+
+def usage():
+	print "hsbc v1.0"
+	print "Usage: " + basename(sys.argv[0]) + " [OPTION]"
+	print ""
+	print "    -h, --help                    display this help and exit"
+	sys.exit(2)
+
+try:
+	options = gnu_getopt(sys.argv[1:], "hu:p:", ["help="])
+except GetoptError, e:
+	print basename(sys.argv[0]) + ": " + str(e)
+	usage()
+
+for option in options[0]:
+	if option[0] == "-h" or option[0] == "--help":
+		usage()
+
+if ACCOUNT_NUM == None or ACCOUNT_PASS == None or ACCOUNT_PASS2 == None:
+	print "You must edit " + sys.argv[0] + " to configure your username and passwords."
+	sys.exit(1)
+
+
+auth = Request("https://www.us.hsbc.com/1/2/?idv_cmd=idv.Authentication",
+	urlencode((
+		("userid", ACCOUNT_NUM),
+		("nextPage", "hsbc.pib.view-accounts.account-summary"),
+	))
+)
+auth.add_header("User-Agent", "hsbc 1.0")
+data = mechanize.urlopen(auth)
+
+
+auth = Request("https://www.us.hsbc.com/1/2/?idv_cmd=idv.Authentication",
+	urlencode((
+		("memorableAnswer", ACCOUNT_PASS),
+		("password", ACCOUNT_PASS2),
+		("submit", "Continue"),
+		("virtualKeyboard", "true"),
+	))
+)
+auth.add_header("User-Agent", "hsbc 1.0")
+data = mechanize.urlopen(auth)
+
+out = open(HSBC_TAB, "w")
+matches = re.search("\$([0-9.,]+)", "".join(data.fp.readlines()), re.DOTALL)
+out.write(matches.group(1).replace(",", "") + "\n")
+out.close()
