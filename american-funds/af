@@ -53,6 +53,7 @@ if SSN == None or PASSWORD == None or AF_TAB == None:
 auth = Request("https://www.americanfunds.com/login/login.htm",
 	urlencode((
 		("action", "login"),
+		("loginMethod", "socialSecurityNumber"),
 		("socialSecurityNumber", SSN),
 		("password", PASSWORD),
 	))
