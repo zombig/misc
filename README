@@ -2,8 +2,9 @@ Horde Financial Scrapers v1.0
 =============================
 
 The scripts in this distribution fetch account balance/value information
-from various financial web sites. Python and mechanize
-(http://wwwsearch.sourceforge.net/mechanize/) are required.
+from various financial web sites. Python, mechanize
+(http://wwwsearch.sourceforge.net/mechanize/), and BeautifulSoup
+(http://www.crummy.com/software/BeautifulSoup/) are required.
 
 Scrapers are included for:
 
