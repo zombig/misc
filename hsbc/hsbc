@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python -tt
 
 # HSBC account balance scraper
 # Copyright (c) 2007, John Morrissey <jwm@horde.net>
