@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
-# American Funds account balance scraper
-# Copyright (c) 2007, John Morrissey <jwm@horde.net>
+# American Funds account balance scraper v1.1
+# Copyright (c) 2007-8, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of Version 2 of the GNU General Public License as
@@ -16,9 +16,9 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 
-SSN = None
-PASSWORD = None
-AF_TAB = "/var/cache/cricket/af.tab"
+USERNAME = ''
+PASSWORD = ''
+AF_TAB = '/var/cache/cricket/af.tab'
 
 from getopt import gnu_getopt, GetoptError
 import mechanize
@@ -29,67 +29,68 @@ from urllib import urlencode
 from urllib2 import Request
 
 def usage():
-	print "af v1.0"
-	print "Usage: " + basename(sys.argv[0]) + " [OPTION]"
-	print ""
-	print "    -h, --help                    display this help and exit"
+	print 'af v1.1'
+	print 'Usage: %s [-h|--help]'  % basename(sys.argv[0])
+	print ''
+	print '    -h, --help                    display this help and exit'
 	sys.exit(2)
 
 try:
-	options = gnu_getopt(sys.argv[1:], "h", ["help="])
+	options = gnu_getopt(sys.argv[1:], 'h', ['help='])
 except GetoptError, e:
-	print basename(sys.argv[0]) + ": " + str(e)
+	print basename(sys.argv[0]) + ': ' + str(e)
 	usage()
 
 for option in options[0]:
-	if option[0] == "-h" or option[0] == "--help":
+	if option[0] == '-h' or option[0] == '--help':
 		usage()
 
-if SSN == None or PASSWORD == None or AF_TAB == None:
-	print "You must edit " + sys.argv[0] + " to configure your username and password."
+if USERNAME == None or PASSWORD == None or AF_TAB == None:
+	print 'You must edit ' + sys.argv[0] + ' to configure your usenrame and password.'
 	sys.exit(1)
 
 
-auth = Request("https://www.americanfunds.com/login/login.htm",
+auth = Request('https://www.americanfunds.com/login/login.htm',
 	urlencode((
-		("action", "login"),
-		("loginMethod", "socialSecurityNumber"),
-		("socialSecurityNumber", SSN),
-		("password", PASSWORD),
+		('action', 'login'),
+		('loginMethod', 'userId'),
+		('userId', USERNAME),
+		('password', PASSWORD),
 	))
 )
-auth.add_header("User-Agent", "af 1.0")
+auth.add_header('User-Agent', 'af 1.1')
 data = mechanize.urlopen(auth)
 
-if "".join(data.fp.readlines()).find("routine site maintenance") != -1 or \
-   "".join(data.fp.readlines()).find("experiencing technical difficulties") != -1:
-	print "americanfunds.com is temporarily unavailable."
+if ''.join(data.fp.readlines()).find('routine site maintenance') != -1 or \
+   ''.join(data.fp.readlines()).find('experiencing technical difficulties') != -1:
+	print 'americanfunds.com is unavailable.'
 	sys.exit(1)
 
 
-auth = Request("https://www.americanfunds.com/account/account-summary.htm")
-auth.add_header("User-Agent", "af 1.0")
+auth = Request('https://www.americanfunds.com/account/account-summary.htm')
+auth.add_header('User-Agent', 'af 1.1')
 data = mechanize.urlopen(auth)
 
-response = "".join(data.fp.readlines())
+response = ''.join(data.fp.readlines())
 
-out = open(AF_TAB, "w")
+out = open(AF_TAB, 'w')
 
-matches = re.search("Non-retirement accounts:.*?\$([\d\.,]+)", response, re.DOTALL)
-out.write("%s %s\n" % ("af-nonret", matches.group(1).replace(",", "")))
+matches = re.search(r'Non-retirement accounts:.*?\$([\d\.,]+)',
+	response, re.DOTALL)
+out.write('%s %s\n' % ('af-nonret', matches.group(1).replace(',', '')))
 
-p = re.compile("ROTH IRA.*", re.DOTALL)
-nonroth = p.sub("", response)
-for name, balance in re.findall("<div><a href=\"[^>]+funds/details[^>]+>\s*(.*?) &#150;.*?<a href=\"[^>]+view-history[^>]+>.*?<div>.*?\$((?:[\d\.]+,)?[\d\.]+)", nonroth, re.DOTALL):
-	out.write("%s %s\n" % (name.lower().replace(" ", "_")[:9], balance.replace(",", "")))
+p = re.compile(r'ROTH IRA.*', re.DOTALL)
+nonroth = p.sub('', response)
+for name, balance in re.findall(r'<div><a href="[^>]+funds/details[^>]+>\s*(.*?) &#150;.*?<a href="[^>]+view-history[^>]+>.*?<div>.*?\$((?:[\d\.]+,)?[\d\.]+)', nonroth, re.DOTALL):
+	out.write('%s %s\n' % (name.lower().replace(' ', '_')[:9], balance.replace(',', '')))
 
 
-matches = re.search("Retirement accounts:.*?\$([\d\.,]+)", response, re.DOTALL)
-out.write("%s %s\n" % ("af-roth", matches.group(1).replace(",", "")))
+matches = re.search(r'Retirement accounts:.*?\$([\d\.,]+)', response, re.DOTALL)
+out.write('%s %s\n' % ('af-roth', matches.group(1).replace(',', '')))
 
-p = re.compile(".*ROTH IRA", re.DOTALL)
-roth = p.sub("", response)
-for name, balance in re.findall("<div><a href=\"[^>]+funds/details[^>]+>\s*(.*?) &#150;.*?<a href=\"[^>]+view-history[^>]+>.*?<div>.*?\$((?:[\d\.]+,)?[\d\.]+)", roth, re.DOTALL):
-	out.write("%s-roth %s\n" % (name.lower().replace(" ", "_")[:9], balance.replace(",", "")))
+p = re.compile('.*ROTH IRA', re.DOTALL)
+roth = p.sub('', response)
+for name, balance in re.findall(r'<div><a href="[^>]+funds/details[^>]+>\s*(.*?) &#150;.*?<a href="[^>]+view-history[^>]+>.*?<div>.*?\$((?:[\d\.]+,)?[\d\.]+)', roth, re.DOTALL):
+	out.write('%s-roth %s\n' % (name.lower().replace(' ', '_')[:9], balance.replace(',', '')))
 
 out.close()
