@@ -1,7 +1,7 @@
 #!/usr/bin/python -tt
 
-# Citizens Bank account balance scraper
-# Copyright (c) 2007, John Morrissey <jwm@horde.net>
+# Citizens Bank account balance scraper v1.1
+# Copyright (c) 2007-8, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of Version 2 of the GNU General Public License as
@@ -20,7 +20,7 @@ USERNAME = None
 PASSWORD = None
 ACCOUNT_NUM = None
 PMDATA = None
-CB_TAB = "/var/cache/cricket/cb.tab"
+CB_TAB = '/var/cache/cricket/cb.tab'
 
 from getopt import gnu_getopt, GetoptError
 import mechanize
@@ -32,95 +32,101 @@ from urllib import urlencode
 from urllib2 import Request
 
 def usage():
-	print "cb v1.0"
-	print "Usage: " + basename(sys.argv[0]) + " [OPTION]"
-	print ""
-	print "    -h, --help                    display this help and exit"
-	sys.exit(2)
+	print 'Citizens Bank account balance scraper v1.1'
+	print 'Usage: %s [-h|--help]' % basename(sys.argv[0])
+	print ''
+	print '    -h, --help                    display this help and exit'
 
 try:
-	options = gnu_getopt(sys.argv[1:], "h", ["help="])
+	options = gnu_getopt(sys.argv[1:], 'h', ['help'])[0]
 except GetoptError, e:
-	print basename(sys.argv[0]) + ": " + str(e)
+	print basename(sys.argv[0]) + ': ' + str(e)
 	usage()
+	sys.exit(1)
 
-for option in options[0]:
-	if option[0] == "-h" or option[0] == "--help":
+for option in options:
+	if option[0] == '-h' or option[0] == '--help':
 		usage()
+		sys.exit(0)
 
-if USERNAME == None or PASSWORD == None or ACCOUNT_NUM == None or PMDATA == None:
-	print "You must edit " + sys.argv[0] + " to configure your username, password, account number, and PMData cookie."
+if not USERNAME or not PASSWORD or not ACCOUNT_NUM or not PMDATA:
+	print 'You must edit %s to configure your username, password, account number, and PMData cookie.' % sys.argv[0]
 	sys.exit(1)
 
 jar = mechanize.CookieJar()
 jar.set_cookie(mechanize.Cookie(
 	None,
-	"PMData", PMDATA, None, False,
-	".citizensbankonline.com", True, True,
-	"/efs/servlet", True, True,
+	'PMData', PMDATA, None, False,
+	'.citizensbankonline.com', True, True,
+	'/efs/servlet', True, True,
 	int(time()) + 86400, False, None, None, None
 ))
 
 
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efs/wait.jsp?target=default.jsp",
-	urlencode((("UserID", USERNAME),))
-)
-auth.add_header("User-Agent", "cb 1.0")
-data = mechanize.urlopen(auth)
-
-
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efs/loginnew-wait.jsp")
-auth.add_header("User-Agent", "cb 1.0")
-data = mechanize.urlopen(auth)
-
-
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efs/sendit.jsp",
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efs/wait.jsp?target=default.jsp',
 	urlencode((
-		("pmdata", PMDATA),
+		('UserID', USERNAME),
 	))
 )
-auth.add_header("User-Agent", "cb 1.0")
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
 data = mechanize.urlopen(auth)
 
 
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efs/login-rsa-wait.jsp?detect=3")
-auth.add_header("User-Agent", "cb 1.0")
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efs/loginnew-wait.jsp')
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
 data = mechanize.urlopen(auth)
 
 
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efs/wait.jsp?target=login-init-wait.jsp",
-	urlencode((("Password", PASSWORD),
-	           ("BrandSettingsFile", "citSettings.jsp")))
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efs/sendit.jsp',
+	urlencode((
+		('pmdata', PMDATA),
+	))
 )
-auth.add_header("User-Agent", "cb 1.0")
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
 data = mechanize.urlopen(auth)
 
 
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efs/login-init-wait.jsp")
-auth.add_header("User-Agent", "cb 1.0")
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efs/login-rsa-wait.jsp?detect=3')
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
 data = mechanize.urlopen(auth)
 
 
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efsonline/index-wait.jsp")
-auth.add_header("User-Agent", "cb 1.0")
-data = mechanize.urlopen(auth)
-
-
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efsonline/account-history-wait.jsp",
-	urlencode((("SetAccountID", ACCOUNT_NUM),))
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efs/wait.jsp?target=login-init-wait.jsp',
+	urlencode((
+		('Password', PASSWORD),
+		('BrandSettingsFile', 'citSettings.jsp')
+	))
 )
-auth.add_header("User-Agent", "cb 1.0")
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
 data = mechanize.urlopen(auth)
 
 
-auth = Request("https://www2.citizensbankonline.com/efs/servlet/efsonline/paged-account-history.jsp")
-auth.add_header("User-Agent", "cb 1.0")
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efs/login-init-wait.jsp')
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
 data = mechanize.urlopen(auth)
 
-p = re.compile(".*Available Balance:[^$]*\$([0-9.,]+).*", re.DOTALL)
-balance = p.sub(r'\1', "".join(data.fp.readlines())).replace(",", "")
 
-out = open(CB_TAB, "w")
-out.write(balance)
-out.write("\n")
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efsonline/index-wait.jsp')
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
+data = mechanize.urlopen(auth)
+
+
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efsonline/account-history-wait.jsp',
+	urlencode((
+		('SetAccountID', ACCOUNT_NUM),
+	))
+)
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
+data = mechanize.urlopen(auth)
+
+
+auth = Request('https://www2.citizensbankonline.com/efs/servlet/efsonline/paged-account-history.jsp')
+auth.add_header('User-Agent', 'Citizens Bank account balance scraper v1.1')
+data = mechanize.urlopen(auth)
+
+p = re.compile('.*Available Balance:[^$]*\$([0-9.,]+).*', re.DOTALL)
+balance = p.sub(r'\1', ''.join(data.fp.readlines())).replace(',', '')
+
+out = open(CB_TAB, 'w')
+out.write(balance + '\n')
 out.close()

@@ -37,7 +37,7 @@ def usage():
 	print '    -h, --help                    display this help and exit'
 
 try:
-	options, when = gnu_getopt(sys.argv[1:], 'h', ['help='])
+	options, when = gnu_getopt(sys.argv[1:], 'h', ['help'])
 except GetoptError, e:
 	print basename(sys.argv[0]) + ': ' + str(e)
 	usage()

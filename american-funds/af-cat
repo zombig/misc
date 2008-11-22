@@ -14,7 +14,7 @@ def usage():
 	sys.exit(2)
 
 try:
-	options, args = gnu_getopt(sys.argv[1:], "h", ["help="])
+	options, args = gnu_getopt(sys.argv[1:], "h", ["help"])
 except GetoptError, e:
 	print basename(sys.argv[0]) + ": " + str(e)
 	usage()
