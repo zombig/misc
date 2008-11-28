@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# mypaystub.info scraper v1.0
+# mypaystub.info scraper v1.1
 # Copyright (c) 2008, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
@@ -31,22 +31,26 @@ from BeautifulSoup import BeautifulSoup
 import mechanize
 
 def usage():
-	print 'mypaystub.info scraper v1.0'
+	print 'mypaystub.info scraper v1.1'
 	print 'Usage: ' + basename(sys.argv[0]) + ' [-h|--help] DATE'
 	print ''
-	print '    -h, --help                    display this help and exit'
+	print '    -h, --help   display this help and exit'
+	print '    -l, --list   list available pay stub dates'
 
 try:
-	options, when = gnu_getopt(sys.argv[1:], 'h', ['help'])
+	options, when = gnu_getopt(sys.argv[1:], 'hl', ['help', 'list'])
 except GetoptError, e:
 	print basename(sys.argv[0]) + ': ' + str(e)
 	usage()
 	sys.exit(1)
 
+LIST_ALL = False
 for option in options:
 	if option[0] == '-h' or option[0] == '--help':
 		usage()
 		sys.exit(1)
+	if option[0] == '-l' or option[0] == '--list':
+		LIST_ALL = True
 
 if not USERNAME or not PASSWORD or not COMPANY:
 	usage()
@@ -66,11 +70,11 @@ auth = Request('https://%s.mypaystub.info/ddiarchive/Default.aspx' % COMPANY,
 		('_Login1:btnLogin', 'Login'),
 	))
 )
-auth.add_header('User-Agent', 'mypaystub.info scraper v1.0')
+auth.add_header('User-Agent', 'mypaystub.info scraper v1.1')
 data = mechanize.urlopen(auth)
 
 auth = Request('https://%s.mypaystub.info/ddiarchive/welcome.aspx?acttype=test' % COMPANY)
-auth.add_header('User-Agent', 'mypaystub.info scraper v1.0')
+auth.add_header('User-Agent', 'mypaystub.info scraper v1.1')
 data = mechanize.urlopen(auth)
 
 soup = BeautifulSoup(''.join(data.fp.readlines()))
@@ -80,27 +84,33 @@ if next[0] != '/':
 	next = '/ddiarchive/%s' % next
 
 auth = Request('https://%s.mypaystub.info/%s' % (COMPANY, next))
-auth.add_header('User-Agent', 'mypaystub.info scraper v1.0')
+auth.add_header('User-Agent', 'mypaystub.info scraper v1.1')
 data = mechanize.urlopen(auth)
 
 soup = BeautifulSoup(''.join(data.fp.readlines()))
-if not when:
-	next = soup.find(text='Voucher Date').findParent(name='tr').nextSibling.\
-		find(name='a')['href']
-else:
+if LIST_ALL:
+	dates = soup.find(text='Voucher Date').findParent(name='table').\
+		findAll(text=re.compile(r'^\s*\d{1,2}/\d{1,2}/\d{4}\s*$'))
+	print '\n'.join(dates)
+	sys.exit(0)
+elif when:
 	next = soup.find(text='Voucher Date').findParent(name='table').\
 		find(text=when[0]).findParent('tr').find(name='a')['href']
+else:
+	next = soup.find(text='Voucher Date').findParent(name='tr').nextSibling.\
+		find(name='a')['href']
+
 if next[0] != '/':
 	next = '/ddiarchive/%s' % next
 
 auth = Request('https://%s.mypaystub.info/%s' % (COMPANY, next))
-auth.add_header('User-Agent', 'mypaystub.info scraper v1.0')
+auth.add_header('User-Agent', 'mypaystub.info scraper v1.1')
 data = mechanize.urlopen(auth)
 
 for tup in cgi.parse_qsl(next.split('?', 1)[1]):
 	if tup[0] == 'documentid':
 		auth = Request('https://%s.mypaystub.info/DDIAssetViewer/DocumentView/viewdocmain.aspx?page=%s' % (COMPANY, tup[1]))
-		auth.add_header('User-Agent', 'mypaystub.info scraper v1.0')
+		auth.add_header('User-Agent', 'mypaystub.info scraper v1.1')
 		data = mechanize.urlopen(auth)
 		print ''.join(data.fp.readlines())
 		break
