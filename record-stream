@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# record-stream v1.2
+#
+# Make program recordings from an online (usually MP3-type) stream.
+#
+# Requires find(1), pgrep(1), ps(1) with -o for display formatting,
+# mktemp(1), and wget.
+#
+# Run this script from cron (or your favorite command scheduler) as often
+# as you want the files to be divided up. For example, if you want hour-long
+# files, run this script hourly:
+#
+# @reboot         /usr/local/bin/record-stream
+# 0 * * * *       /usr/local/bin/record-stream
+#
+# The @reboot line is supported by Vixie cron to make sure that program
+# recordings are re-started immediately upon reboot instead of waiting for
+# the next top of the hour.
+#
+#
+# High-level overview:
+#
+# At each run:
+# - Old files are removed from $ROOT according to the retention period
+#   specified by $KEEPDAYS.
+# - The stream starts recording from $URL to /tmp/ (or TMPDIR, if set in
+#   the environment)
+# - The stream is given a few seconds to ensure it has started successfully.
+# - If the stream has started recording successfully, the previous
+#   instance is signaled to shut down its recording and move the file
+#   into place as $ROOT/$FILE.
+#
+#
+# Copyright (c) 2005-7, John Morrissey
+# 
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the Free
+# Software Foundation; either version 2 of the License, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc., 59
+# Temple Place, Suite 330, Boston, MA 02111-1307, USA.
+
+URL=http://your/stream
+ROOT=/path/to/recordings/
+FILE=recording-$(date +%Y-%b-%d-%H%M | tr A-Z a-z).mp3
+KEEPDAYS=31
+
+# Keep $KEEPDAYS calendar days' worth of recordings
+find $ROOT -maxdepth 1 -daystart -mtime +$KEEPDAYS -name \*.mp3 -exec rm {} \;
+
+if ! temp_out=$(mktemp -qt record-aircheck.XXXXXX); then
+	echo "Can't create tempfile, aborting."
+	exit 1
+fi
+
+stop_wget() {
+	# Disown our wget child first; otherwise, bash(1) will emit:
+	#   [1]+  Terminated              wget
+	# which there is no way to silence.
+	disown %?wget
+	for wget_pid in $(pgrep -f "wget --output-document=/tmp/record-aircheck\.[[:alnum:]]{6} --quiet $URL"); do
+		# Make sure it's our child.
+		if [ "$(ps -o ppid= $wget_pid)" == $$ ]; then
+			kill $wget_pid
+			break
+		fi
+	done
+}
+trap stop_wget SIGUSR1
+
+set -m
+wget --output-document=$temp_out --quiet $URL &
+# Give it time to start and connect; if something isn't going to work, it's
+# probably going to break in the first couple of seconds.
+sleep 5
+if [ $(jobs | wc -l) -lt 1 ]; then
+	echo "Couldn't start recording stream, aborting."
+	exit 1
+fi
+
+# Signal any past invocations to stop their wget children; otherwise,
+# they'll keep recording indefinitely.
+for wget_pid in $(pgrep -f "wget --output-document=/tmp/record-aircheck\.[[:alnum:]]{6} --quiet $URL"); do
+	wget_ppid=$(ps -o ppid= $wget_pid)
+	if [ "$wget_ppid" -eq $$ ]; then
+		# Don't commit suicide; this is the wget(1) we just started.
+		continue
+	fi
+	# For some reason, previous instances of this script die (go
+	# defunct), and I can't figure out why. Kludge around this by
+	# checking to see if wget has been given init(8) as a parent,
+	# and kill wget itself if so.
+	if [ $wget_ppid == 1 ]; then
+		kill $wget_pid
+	else
+		kill -USR1 $wget_ppid
+	fi
+done
+
+# Wait until the next invocation signals us to terminate our wget(1), then
+# move the recording into place.
+wait
+mv -f $temp_out $ROOT/$FILE
+chmod 644 $ROOT/$FILE

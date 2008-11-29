@@ -1,0 +1,60 @@
+#!/bin/sh
+
+# record-stream v1.0.1 (formerly record-aircheck)
+#
+# Make program recordings from an online (usually MP3-type) stream.
+#
+# Requires wget, pidof(1), and probably a Linux-like ps(1) and find(1).
+#
+# Run this script from cron (or your favorite command scheduler) as often
+# as you want the files to be divided up. For example, if you want hour-long
+# files, run this script hourly:
+#
+# @reboot         /usr/local/bin/record-stream
+# 0 * * * *       /usr/local/bin/record-stream
+#
+# Airchecks will be kept for KEEPDAYS days.
+#
+# The @reboot line is supported by Vixie cron to make sure that program
+# recordings are re-started immediately upon reboot instead of waiting for
+# the next top of the hour.
+#
+#
+# Copyright (c) 2005-6, John Morrissey
+# 
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the Free
+# Software Foundation; either version 2 of the License, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc., 59
+# Temple Place, Suite 330, Boston, MA 02111-1307, USA.
+
+URL=http://url.of.stream
+ROOT=/var/local/recordings/
+FILE=recording-`date +%Y-%b-%d-%H:%M | tr A-Z a-z`.mp3
+KEEPDAYS=14
+
+umask 022
+cd $ROOT
+
+# Keep $KEEPDAYS calendar days' worth of recordings
+find $ROOT -maxdepth 1 -daystart -mtime +$KEEPDAYS -name \*.mp3 -exec rm {} \;
+
+# Kill any existing wget(1) processes; they're from past recordings and will
+# keep recording even when our new wget starts.
+for pid in `pidof wget`; do
+	if ps --width 500 --pid $pid --format=command | tail --lines 1 | \
+	   grep --quiet "$ROOT.*$URL"
+	then
+		kill $pid
+	fi
+done
+
+exec wget --output-document=$ROOT/$FILE --quiet $URL &

@@ -1,0 +1,46 @@
+@comment $OpenBSD: PLIST,v 1.5 2006/06/29 17:26:15 steven Exp $
+@name vpnc-0.5.1p1
+@comment subdir=security/vpnc cdrom=yes ftp=yes
+@arch i386
++DESC
+@md5 a02e3107f2db0255941fd0cfd1291112
+@size 378
++DISPLAY
+@md5 d651130c9a8f27b1d330e4b3d1e70bb4
+@size 262
+@depend security/libgcrypt:libgcrypt->=1.2:libgcrypt-1.2.4
+@wantlib c.41.0
+@wantlib gcrypt.12.1
+@wantlib gpg-error.1.4
+@wantlib iconv.4.0
+@wantlib intl.3.0
+@cwd /usr/local
+man/cat3f/
+man/man3f/
+@man man/man8/vpnc.8
+@md5 32e427dcb7d996afe52e38e47dcf4213
+@size 11507
+sbin/vpnc
+@md5 f22f51b0446840f90c1fa20b3791e26b
+@size 98276
+share/doc/vpnc/
+share/doc/vpnc/README
+@md5 206519daade09ea61769a4fe0840123a
+@size 5814
+share/examples/vpnc/
+@sample /etc/vpnc/
+share/examples/vpnc/vpnc-script
+@md5 5a3ed34d7baefd36b29025b26696b9c7
+@size 14375
+@mode 0755
+@sample /etc/vpnc/vpnc-script
+@mode
+share/examples/vpnc/vpnc.conf
+@md5 29f545bb2941f9f088a449a05a053673
+@size 141
+@mode 0600
+@sample /etc/vpnc/default.conf
+@mode
+share/examples/vpnc/vpnc.sh
+@md5 7754fd635bad6e3f3e3ebb73e6bbb6f9
+@size 646

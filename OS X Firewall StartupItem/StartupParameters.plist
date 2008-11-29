@@ -1,0 +1,11 @@
+{
+  Description     = "firewall";
+  Provides        = ("Firewall");
+  Requires        = ("Network");
+  OrderPreference = "None";
+  Messages =
+  {
+    start = "Enabling firewall rules";
+    stop  = "Disabling firewall rules";
+  };
+}

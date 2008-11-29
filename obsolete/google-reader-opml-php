@@ -1,0 +1,57 @@
+#!/usr/local/bin/php -q
+<?php
+/* google-reader-opml-php v1.1 - Back up Google Reader OPML.
+ * Copyright (c) 2006, John Morrissey <jwm@horde.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, 5th Floor, Boston, MA 02110-1301
+ * USA.
+ */
+
+/* This script is a bit of a hack; we more or less imitate a web browser
+ * and scrape the result. It would be nice if Google Reader OPML could be
+ * downloaded through some Google Reader API.
+ */
+
+$GOOGLE_USERNAME = 'example@example.com';
+$GOOGLE_PASSWORD = 'example';
+
+require_once 'HTTP/Request.php';
+$req = &new HTTP_Request(null, array('allowRedirects' => false));
+$req->addHeader('User-Agent', 'google-reader-opml-php 1.1');
+
+$req->setUrl('https://www.google.com/accounts/ServiceLoginAuth');
+$req->setMethod(HTTP_REQUEST_METHOD_POST);
+$req->addPostData('Email', $GOOGLE_USERNAME);
+$req->addPostData('Passwd', $GOOGLE_PASSWORD);
+$result = $req->sendRequest();
+if (PEAR::isError($result)) {
+	die("Unable to authenticate $GOOGLE_USERNAME as a Google Account: " . $result->getMessage() . "\n");
+}
+if ($req->getResponseCode() != 302) {
+	die("Unable to authenticate $GOOGLE_USERNAME as a Google Account: invalid credentials.\n");
+}
+
+$req->clearPostData();
+$req->setMethod(HTTP_REQUEST_METHOD_GET);
+$req->setUrl('http://www.google.com/reader/subscriptions/export');
+foreach ($req->getResponseCookies() as $cookie) {
+	$req->addCookie($cookie['name'], $cookie['value']);
+}
+$result = $req->sendRequest();
+if (PEAR::isError($result)) {
+	die("Unable to fetch OPML for $GOOGLE_USERNAME: " . $result->getMessage() . "\n");
+}
+
+print $req->getResponseBody();

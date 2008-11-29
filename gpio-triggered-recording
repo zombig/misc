@@ -1,0 +1,174 @@
+#!/usr/bin/python -tt
+
+# Axia GPIO-controlled recording v1.0
+# Copyright (c) 2008, John Morrissey <jwm@horde.net>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+#	* Redistributions of source code must retain the above copyright notice,
+#	  this list of conditions and the following disclaimer.
+#	* Redistributions in binary form must reproduce the above copyright
+#	  notice, this list of conditions and the following disclaimer in the
+#	  documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+# IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+GPIO_NODE = 'gpio0.example.com'
+GPIO_PORT = 93
+GPO_CHANNEL = 1
+STREAM_URL = 'http://streaming.example.com/stream'
+DEST_DIR = '/output/path'
+
+import os
+import re
+import sys
+from syslog import *
+from tempfile import mkstemp
+from time import strftime
+
+from twisted.internet import reactor, protocol
+from twisted.protocols import basic
+from twisted.web import client
+
+STREAM_TRANSPORTS = []
+STREAM_AUTORESTART = True
+
+class StoppableHTTPPageDownloader(client.HTTPPageDownloader):
+	def connectionMade(self):
+		# Threads can race to access the stream_transport global, so keep a
+		# list of transports and have everything that needs the transport
+		# for the recently completed connection use the 0 index. This list
+		# should never be more than two entries; if it is, something has
+		# gone awry and old transports are not being properly reaped.
+		globals()['STREAM_TRANSPORTS'].append(self.transport)
+		return client.HTTPPageDownloader.connectionMade(self)
+
+class StoppableHTTPDownloader(client.HTTPDownloader):
+	protocol = StoppableHTTPPageDownloader
+
+def stream_record_complete(result, filename):
+	if result:
+		syslog(LOG_INFO, 'Stream record to %s complete: %s' % (filename, str(result)))
+	else:
+		syslog(LOG_INFO, 'Stream record to %s complete.' % filename)
+
+	if globals()['STREAM_AUTORESTART']:
+		syslog(LOG_INFO,
+			'Received stream end-of-file for %s, but recording still in progress. Resuming recording...' %
+			filename)
+		start_stream_download(STREAM_URL)
+
+	completed_name = \
+		re.sub(r'inprogress-(\d{4}-\w{3}-\d{2}-[\d:]{8})-.{6}.mp3', 
+			r'complete-\1-%s.mp3' % strftime('%Y-%b-%d-%H:%M:%S').lower(),
+			filename)
+	syslog(LOG_DEBUG,
+		'Renaming output file %s to %s.' % (filename, completed_name))
+	os.rename(filename, completed_name)
+	STREAM_AUTORESTART = True
+
+def stream_record_failed(failure, filename):
+	syslog(LOG_ERR, 'Stream record failed: %s' % str(failure))
+	if globals()['STREAM_AUTORESTART']:
+		syslog(LOG_ERR,
+			'Error while recording stream to %s, attempting to resume recording: %s' %
+			(filename, failure.getErrorMessage()))
+		start_stream_download(STREAM_URL)
+	STREAM_AUTORESTART = True
+
+def start_stream_download(url):
+	fd, name = mkstemp(dir=DEST_DIR, suffix='.mp3',
+		prefix='inprogress-%s-' % strftime('%Y-%b-%d-%H:%M:%S').lower())
+	os.close(fd)
+
+	scheme, host, port, path = client._parse(url)
+	factory = StoppableHTTPDownloader(url, name)
+	factory.deferred.addCallback(
+		stream_record_complete, name).addErrback(
+		stream_record_failed, name)
+	reactor.connectTCP(host, port, factory)
+	return factory
+
+class GpioClient(basic.LineReceiver):
+	def connectionMade(self):
+		syslog(LOG_INFO, 'Connected to GPIO node %s on port %d.' %
+			(GPIO_NODE, GPIO_PORT))
+		self.transport.write('ADD GPO\n')
+
+	def lineReceived(self, data):
+		global STREAM_TRANSPORTS, STREAM_AUTORESTART
+
+		data = data.rstrip()
+		syslog(LOG_DEBUG, 'Received GPIO trigger: %s' % data)
+		if data.startswith('GPO %d l' % GPO_CHANNEL):
+			# If we see pin #1 ("on" light) already low (triggered)
+			# and we aren't recording, we must have missed the initial
+			# trigger ("L"). Start recording.
+			if not STREAM_TRANSPORTS:
+				start_stream_download(STREAM_URL)
+		elif data.startswith('GPO %d L' % GPO_CHANNEL):
+			# If we see pin #1 ("on" light) go low (triggered),
+			# stop any existing recording (we must have missed the
+			# line going high) and start recording.
+			if STREAM_TRANSPORTS:
+				STREAM_AUTORESTART = False
+				syslog(LOG_DEBUG, 'GPO L: closing stream connection.')
+				STREAM_TRANSPORTS[0].loseConnection()
+				del STREAM_TRANSPORTS[0]
+			start_stream_download(STREAM_URL)
+		elif re.match(r'^GPO %d [hH]' % GPO_CHANNEL, data):
+			# Whenever we see pin #1 ("on" light) go high (released),
+			# we want to stop recording, regardless of whether the
+			# line is going high *right now* ("H") or went high previously
+			# ("h"), since we might have missed the line's release ("H").
+			if STREAM_TRANSPORTS:
+				STREAM_AUTORESTART = False
+				syslog(LOG_DEBUG, 'GPO [hH]: closing stream connection.')
+				STREAM_TRANSPORTS[0].loseConnection()
+				del STREAM_TRANSPORTS[0]
+
+class GpioFactory(protocol.ReconnectingClientFactory):
+	protocol = GpioClient
+
+	def buildProtocol(self, addr):
+		self.resetDelay()
+		return self.protocol()
+
+	def clientConnectionFailed(self, connector, reason):
+		if reason.value.args:
+			syslog(LOG_ERR,
+				'GPIO connection failed; attempting reconnect: %s' %
+				' '.join(reason.value.args))
+		else:
+			syslog(LOG_ERR, 'GPIO connection failed; attempting reconnect.')
+		protocol.ReconnectingClientFactory.clientConnectionFailed(
+			self, connector, reason)
+
+	def clientConnectionLost(self, connector, reason):
+		if reason.value.args:
+			syslog(LOG_NOTICE,
+				'GPIO connection lost; attempting reconnect: %s' %
+				' '.join(reason.value.args))
+		else:
+			syslog(LOG_NOTICE, 'GPIO connection lost; attempting reconnect.')
+		protocol.ReconnectingClientFactory.clientConnectionLost(
+			self, connector, reason)
+
+if __name__ == '__main__':
+	openlog(os.path.basename(sys.argv[0]), LOG_PID)
+
+	reactor.connectTCP(GPIO_NODE, GPIO_PORT, GpioFactory())
+	reactor.run()

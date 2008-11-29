@@ -1,0 +1,38 @@
+<tt><pre>
+These patches modify the latest Ubuntu 2.6.12 kernel (for Breezy) to support
+Dell's 9th generation hardware (1950, 2950, etc.).
+
+Obtain the latest Ubuntu 2.6.12 kernel source:
+
+apt-get source linux-source-2.6.12
+
+All pathnames mentioned are relative to the kernel package's top-level
+directory (e.g., linux-source-2.6.12-2.6.12).
+
+Copy these four patch files to debian/patches/. Edit
+debian/patches/00list-KERNELVERSION, where KERNELVERSION is the Debian
+version component from the topmost changelog entry in debian/changelog.
+For example, if the first entry in debian/changelog is:
+
+linux-source-2.6.12 (2.6.12-10.35) breezy-security; urgency=low
+
+KERNELVERSION should be replaced with 10.35, so you would edit
+debian/patches/00list-10.35. Add:
+
+megaraid-sas
+megaraid-sas2
+megaraid-sas3
+bnx2-updates
+
+to the bottom of this file.
+
+You may want to add a new changelog entry to debian/changes indicating that
+these patches have been added.
+
+Run:
+
+dpkg-buildpackage -rfakeroot
+
+from the package's top-level directory (linux-source-2.6.12-2.6.12). It will
+emit .debs in the parent directory.
+</pre></tt>

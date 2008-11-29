@@ -1,0 +1,542 @@
+diff -urN radiusd-cistron-1.6.4.stock/doc/README.ldap radiusd-cistron-1.6.4/doc/README.ldap
+--- radiusd-cistron-1.6.4.stock/doc/README.ldap	Wed Dec 31 19:00:00 1969
++++ radiusd-cistron-1.6.4/doc/README.ldap	Thu Apr 12 17:21:29 2001
+@@ -0,0 +1,34 @@
++[NOTE: I've basically cleaned up the source a bit and made this apply
++cleanly against Cistron radiusd 1.6.4. -12/Apr/2001, John Morrissey,
++jwm@horde.net]
++
++I really need to write up some decent documentation, but this is the first
++beta patch.  I have tested this with cistron-1.5.4.3-beta15, using the
++netscape ldap sdk.  The server I was testing it against is OpenLDAP 1.2.0
++
++This patch is based on the MySQL Cistron patch by oyarzun@wilmington.net.
++
++The only configuration that needs to be done is the /etc/raddb/ldapserver
++file which should look similar to this: 
++
++  server localhost
++  basedn "o=Someorg, c=US"
++  port 389
++  login  "cn=radiusserver, o=Someorg, c=US"
++  password mypassword
++  filter "(uid=%u)"
++  doauth yes
++
++There is a sample config file in the raddb/ directory.
++
++If the login and password lines are not included or are blank then an
++anonymous bind will be made to the ldap server.  The filter line needs to
++be quoted, and a %u will be replaced by the username attempting to
++authenticate.
++ 
++You also need to set Auth-Type = LDAP for the authentication to happen.
++
++I will be working on this as time permits, and hopefully looking into
++using async ldap calls which should speed up the auth requests some.
++
++Email with problems/suggestions james@wwnet.net
+diff -urN radiusd-cistron-1.6.4.stock/raddb/dictionary radiusd-cistron-1.6.4/raddb/dictionary
+--- radiusd-cistron-1.6.4.stock/raddb/dictionary	Tue Jul 18 12:18:02 2000
++++ radiusd-cistron-1.6.4/raddb/dictionary	Thu Apr 12 16:28:15 2001
+@@ -238,6 +238,7 @@
+ #
+ #	Cistron extensions
+ #
++VALUE		Auth-Type		LDAP			252
+ VALUE		Auth-Type		Pam			253
+ VALUE		Auth-Type		Accept			254
+ 
+diff -urN radiusd-cistron-1.6.4.stock/raddb/ldapserver radiusd-cistron-1.6.4/raddb/ldapserver
+--- radiusd-cistron-1.6.4.stock/raddb/ldapserver	Wed Dec 31 19:00:00 1969
++++ radiusd-cistron-1.6.4/raddb/ldapserver	Thu Apr 12 16:28:15 2001
+@@ -0,0 +1,7 @@
++server localhost
++port 389
++basedn "o=Someorg, c=US"
++login "cn=radiusserver, o=Someorg, c=US"
++password mypassword
++filter "(uid=%u)"
++doauth yes
+diff -urN radiusd-cistron-1.6.4.stock/raddb/users radiusd-cistron-1.6.4/raddb/users
+--- radiusd-cistron-1.6.4.stock/raddb/users	Wed Aug 30 11:32:19 2000
++++ radiusd-cistron-1.6.4/raddb/users	Thu Apr 12 16:28:15 2001
+@@ -105,7 +105,8 @@
+ # First setup all accounts to be checked against the UNIX /etc/passwd.
+ # (Unless a password was already given earlier in this file).
+ #
+-DEFAULT	Auth-Type = System
++#DEFAULT	Auth-Type = System
++DEFAULT	Auth-Type = LDAP
+ 	Fall-Through = 1
+ 
+ #
+diff -urN radiusd-cistron-1.6.4.stock/src/Make.inc radiusd-cistron-1.6.4/src/Make.inc
+--- radiusd-cistron-1.6.4.stock/src/Make.inc	Mon Aug 21 08:13:27 2000
++++ radiusd-cistron-1.6.4/src/Make.inc	Thu Apr 12 16:28:15 2001
+@@ -8,13 +8,13 @@
+ 
+ SERVER_OBJS    = radiusd.o dict.o files.o util.o md5.o attrprint.o \
+ 			acct.o radius.o pam.o log.o version.o proxy.o \
+-			exec.o auth.o timestr.o cache.o
++			exec.o auth.o timestr.o cache.o ldap.o
+ SERVERDBM_OBJS = radiusddbm.o dict.o filesdbm.o util.o md5.o attrprint.o \
+ 			acct.o radius.o pam.o log.o versiondbm.o proxy.o \
+-			exec.o auth.o timestr.o cache.o
++			exec.o auth.o timestr.o cache.o ldap.o
+ SERVER_SRCS    = radiusd.c dict.c files.c util.c md5.c attrprint.c acct.c \
+ 			radius.c pam.c log.c version.c proxy.c \
+-			exec.c auth.c timestr.c cache.c
++			exec.c auth.c timestr.c cache.c ldap.c
+ INCLUDES       = radius.h conf.h
+ 
+ all:	radiusd radwho radzap raduse radtest
+@@ -22,14 +22,15 @@
+ dbm:	radiusd.dbm builddbm
+ 
+ radiusd: $(SERVER_OBJS)
+-	$(CC) $(LDFLAGS) -o radiusd $(SERVER_OBJS) $(LIBS) $(LCRYPT) $(PAMLIB)
++	$(CC) $(LDFLAGS) -o radiusd $(SERVER_OBJS) $(LIBS) $(LCRYPT) \
++			$(PAMLIB) $(LDAPLIB)
+ 
+ radiusd.dbm: $(SERVERDBM_OBJS)
+ 	$(CC) $(LDFLAGS) -o radiusd.dbm $(SERVERDBM_OBJS) $(LIBS) $(LCRYPT) \
+-			 $(DBMLIB) $(PAMLIB)
++			 $(DBMLIB) $(PAMLIB) $(LDAPLIB)
+ 
+ radiusd.o: radiusd.c $(INCLUDES)
+-	$(CC) $(CFLAGS) -c radiusd.c
++	$(CC) $(CFLAGS) $(LDAP) -c radiusd.c
+ 
+ radiusddbm.o: radiusd.c $(INCLUDES)
+ 	$(CC) $(CFLAGS) $(DBM) -c radiusd.c -o radiusddbm.o
+@@ -61,6 +62,9 @@
+ cache.o:  cache.c $(INCLUDES)
+ 	$(CC) $(CFLAGS) -c cache.c 
+ 
++ldap.o: ldap.c $(INCLUDES)
++	$(CC) $(CFLAGS) $(LDAP) -c ldap.c
++
+ proxy.o:  proxy.c $(INCLUDES)
+ 	$(CC) $(CFLAGS) -c proxy.c
+ 
+@@ -68,7 +72,7 @@
+ 	$(CC) $(CFLAGS) -c exec.c
+ 
+ auth.o:  auth.c $(INCLUDES)
+-	$(CC) $(CFLAGS) $(PAM) -c auth.c
++	$(CC) $(CFLAGS) $(PAM) $(LDAP) -c auth.c
+ 
+ version.o: version.c $(INCLUDES)
+ 	$(CC) $(CFLAGS) -o version.o -c version.c
+diff -urN radiusd-cistron-1.6.4.stock/src/Makefile radiusd-cistron-1.6.4/src/Makefile
+--- radiusd-cistron-1.6.4.stock/src/Makefile	Sat Sep 18 18:10:41 1999
++++ radiusd-cistron-1.6.4/src/Makefile	Thu Apr 12 16:58:40 2001
+@@ -25,6 +25,9 @@
+ #PAM	= -DPAM
+ #PAMLIB	= -lpam -ldl
+ 
++LDAP	= -DUSELDAP
++LDAPLIB = -lldap -llber
++
+ BINDIR  = /usr/local/bin
+ SBINDIR = /usr/local/sbin
+ 
+diff -urN radiusd-cistron-1.6.4.stock/src/auth.c radiusd-cistron-1.6.4/src/auth.c
+--- radiusd-cistron-1.6.4.stock/src/auth.c	Wed Aug 30 09:35:48 2000
++++ radiusd-cistron-1.6.4/src/auth.c	Thu Apr 12 17:17:28 2001
+@@ -340,6 +340,8 @@
+ 			auth_type = PW_AUTHTYPE_SYSTEM;
+ 		else if(password_pair && !strcmp(password_pair->strvalue,"PAM"))
+ 			auth_type = PW_AUTHTYPE_PAM;
++		else if(password_pair &&!strcmp(password_pair->strvalue,"LDAP"))
++			auth_type = PW_AUTHTYPE_LDAP;
+ 		else
+ 			auth_type = PW_AUTHTYPE_LOCAL;
+ 	}
+@@ -388,6 +390,15 @@
+ #else
+ 			log(L_ERR, "%s: PAM authentication not available",
+ 				name);
++			result = -1;
++#endif
++			break;
++		case PW_AUTHTYPE_LDAP:
++#ifdef USELDAP
++			if (ldap_pass(name, string) != 0)
++				result = -1;
++#else
++			log(L_ERR, "%s: LDAP Authentication not available", name);
+ 			result = -1;
+ #endif
+ 			break;
+diff -urN radiusd-cistron-1.6.4.stock/src/ldap.c radiusd-cistron-1.6.4/src/ldap.c
+--- radiusd-cistron-1.6.4.stock/src/ldap.c	Wed Dec 31 19:00:00 1969
++++ radiusd-cistron-1.6.4/src/ldap.c	Thu Apr 12 17:17:07 2001
+@@ -0,0 +1,313 @@
++/*
++ * ldap.c	Functions to access the LDAP database.
++ *
++ * This is mostly from a Mysql+Cistron patch from oyarzun@wilmington.net
++ *
++ * Much of the Mysql connection and accounting code was taken from
++ * Wim Bonis's (bonis@kiss.de) accounting patch to livingston radius
++ * 2.01. His patch can be found at:
++ *
++ *       ftp://ftp.kiss.de/pub/unix/livingston/mysql-patches.tgz
++ *
++ * Updated to patch against Cistron radiusd 1.6.4 by jwm@horde.net.
++ * Version:	@(#)ldap.c  1.10  29-Jan-1999  james@wwnet.net
++ *
++ */
++
++#ifdef USELDAP
++
++#include	<sys/types.h>
++#include	<sys/socket.h>
++#include	<sys/time.h>
++#include	<netinet/in.h>
++
++#include	<stdio.h>
++#include	<stdlib.h>
++#include	<netdb.h>
++#include	<pwd.h>
++#include	<time.h>
++#include	<ctype.h>
++#include	<strings.h>
++#include	<errno.h>
++
++#include	<lber.h>
++#include	<ldap.h>
++
++#include	"radiusd.h"
++
++static char	*make_filter(char *, char *);
++static void	fieldcpy(char *, char **);
++
++int  use_ldap_auth, ldap_port;
++char ldap_server[40], ldap_login[40], ldap_password[20],
++	 ldap_filter[128], ldap_basedn[128];
++
++
++/*************************************************************************
++ *
++ *	Function: radldap_init
++ *
++ *	Purpose: Reads in radldap Config File
++ *
++ *************************************************************************/
++
++int
++radldap_init(void)
++{
++	FILE	*ldapcfd;
++	int		line_no;
++	char	ldapcfile[256], dummystr[9], namestr[64], buffer[256], *ptr;
++
++	/* These are the defaults. If configured, we override them below. */
++	use_ldap_auth = 0;
++	ldap_port = 389;
++	strcpy(ldap_server,   "");
++	strcpy(ldap_login,    "");
++	strcpy(ldap_password, "");
++	strcpy(ldap_basedn,   "");
++	strcpy(ldap_filter,   "");
++
++	snprintf(ldapcfile, sizeof(ldapcfile), "%s/%s", radius_dir, "ldapserver");
++	if ((ldapcfd = fopen(ldapcfile, "r")) == (FILE *) NULL) {
++		log(L_ERR, "Could not read ldapserver file %s: %s", ldapcfile, strerror(errno));
++		return -1;
++	}
++
++	line_no = 0;
++	while (fgets(buffer, sizeof(buffer), ldapcfd) != (char *) NULL) {
++		line_no++;
++
++		/* Skip empty space */
++		if (*buffer == '#' || *buffer == '\0' || *buffer == '\n')
++			continue;
++
++		if (strncasecmp(buffer, "server", 6) == 0) {
++			/* Read the SERVER line */
++			if (sscanf(buffer, "%s%s", dummystr, namestr) != 2)
++				log(L_ERR, "invalid attribute on line %d of ldapserver file %s",
++						   line_no, ldapcfile);
++			else
++				strncpy(ldap_server, namestr, sizeof(ldap_server));
++		}
++
++		else if (strncasecmp(buffer, "port", 4) == 0) {
++			/* Read the PORT line */
++			if (sscanf(buffer, "%s%s", dummystr, namestr) != 2)
++				log(L_ERR, "invalid attribute on line %d of ldapserver file %s",
++						   line_no, ldapcfile);
++			else
++				ldap_port = atoi(namestr);
++		}
++
++		else if (strncasecmp(buffer, "login", 5) == 0) {
++			/* Read the LOGIN line */
++			if (sscanf(buffer, "%s%s", dummystr, namestr) != 2)
++				log(L_ERR, "invalid attribute on line %d of ldapserver file %s, using NULL login",
++						   line_no, ldapcfile);
++			else
++				strncpy(ldap_login, namestr, sizeof(ldap_login));
++		}
++
++		else if (strncasecmp(buffer, "password", 8) == 0) {
++			/* Read the PASSWORD line */
++			if (sscanf(buffer, "%s%s", dummystr, namestr) != 2)
++				log(L_ERR, "invalid attribute on line %d of ldapserver file %s, using NULL password",
++						   line_no, ldapcfile);
++			else
++				strncpy(ldap_password, namestr, sizeof(ldap_password));
++		}
++
++		else if (strncasecmp(buffer, "basedn", 6) == 0) {
++			/* Read the BASEDN line */
++			ptr = buffer + 7;
++			fieldcpy(ldap_basedn, &ptr);
++		}
++
++		else if (strncasecmp(buffer, "filter", 6) == 0) {
++			ptr = buffer + 7;
++			fieldcpy(ldap_filter, &ptr);
++		}
++
++		else if (strncasecmp(buffer, "doauth", 6) == 0) {
++			/* Read the DOAUTH line */
++			if (sscanf(buffer, "%s%s", dummystr, namestr) != 2)
++				log(L_ERR, "invalid attribute on line %d of ldapserver file %s",
++						   line_no, ldapcfile);
++			else {
++				if (strncasecmp(namestr, "yes", 3) == 0)
++					use_ldap_auth = 1;
++			}
++		}
++	}
++
++	fclose(ldapcfd);
++
++	log(L_INFO, "LDAP_init: using: %s:%d,%s,%s,%s,%d",
++				ldap_server, ldap_port, ldap_login, ldap_filter,
++				ldap_basedn, use_ldap_auth);
++
++	return 0;
++}
++
++
++/*************************************************************************
++ *
++ *	Function: ldap_pass
++ *
++ *	Purpose: Check the user's password against ldap database
++ *
++ *************************************************************************/
++
++int
++ldap_pass(char *name, char *passwd)
++{
++	static LDAP *ld;
++	LDAPMessage *result, *msg;
++	char *filter, *dn, *attrs[] = {"uid", NULL};
++
++	if (use_ldap_auth == 0) {
++		log(L_ERR, "LDAP Auth specified in users file, but not in ldapserver file");
++		return -1;
++	}
++
++	if (ld == NULL) {
++		if ((ld = ldap_init(ldap_server, ldap_port)) == NULL)
++			return -1;
++
++		if (ldap_simple_bind_s(ld, ldap_login, ldap_password) != LDAP_SUCCESS) {
++			log(L_ERR, "LDAP ldap_simple_bind_s failed");
++			ldap_unbind_s(ld);
++			return -1;
++		}
++	}
++
++	filter = make_filter(ldap_filter, name);
++
++	if (ldap_search_s(ld, ldap_basedn, LDAP_SCOPE_SUBTREE, filter, attrs, 1, &result) != LDAP_SUCCESS) {
++		ldap_unbind_s(ld);
++		return -1;
++	}
++
++	if (ldap_count_entries(ld, result) != 1) {
++		ldap_unbind_s(ld);
++		return -1;
++	}
++
++	if ((msg = ldap_first_entry(ld, result)) == NULL) {
++		ldap_unbind_s(ld);
++		return -1;
++	}
++
++	if ((dn = ldap_get_dn(ld, msg)) == NULL) {
++		ldap_unbind_s(ld);
++		return -1;
++	}
++
++	if (ldap_simple_bind_s(ld, dn, passwd) != LDAP_SUCCESS) {
++		ldap_unbind_s(ld);
++		return -1;
++	}
++
++#ifdef ldap_memfree
++	ldap_memfree(dn);
++#else
++	free(dn);
++#endif
++	ldap_unbind_s(ld);
++
++	DEBUG("User %s successfully authenticated via LDAP", name);
++	return 0;
++}
++
++/*
++ *	Replace %<whatever> in a string.
++ *
++ *	%u   User name
++ *
++ */
++static char
++*make_filter(char *str, char *name)
++{
++	static char buf[MAX_AUTH_QUERY_LEN];
++	int i = 0, c;
++	char *p;
++
++	for(p = str; *p; p++) {
++		c = *p;
++		if (c != '%' && c != '\\') {
++			buf[i++] = *p;
++			continue;
++		}
++		if (*++p == 0) break;
++		if (c == '%') switch(*p) {
++			case '%':
++				buf[i++] = *p;
++				break;
++			case 'u': /* User name */
++				if (name != NULL)
++					strcpy(buf + i, name);
++				else
++					strcpy(buf + i, " ");
++				i += strlen(buf + i);
++				break;
++			default:
++				buf[i++] = '%';
++				buf[i++] = *p;
++				break;
++		}
++		if (c == '\\') switch(*p) {
++			case 'n':
++				buf[i++] = '\n';
++				break;
++			case 'r':
++				buf[i++] = '\r';
++				break;
++			case 't':
++				buf[i++] = '\t';
++				break;
++			default:
++				buf[i++] = '\\';
++				buf[i++] = *p;
++				break;
++		}
++	}
++
++	if (i >= MAX_AUTH_QUERY_LEN)
++		i = MAX_AUTH_QUERY_LEN - 1;
++	buf[i++] = 0;
++
++	return buf;
++}
++
++static void
++fieldcpy(char *string, char **uptr)
++{
++	char	*ptr;
++
++	ptr = *uptr;
++	while (*ptr == ' ' || *ptr == '\t') {
++	  ptr++;
++	}
++	if (*ptr == '"') {
++		ptr++;
++		while(*ptr != '"' && *ptr != '\0' && *ptr != '\n') {
++			*string++ = *ptr++;
++		}
++		*string = '\0';
++		if (*ptr == '"') {
++			ptr++;
++		}
++		*uptr = ptr;
++		return;
++	}
++
++	while(*ptr != ' ' && *ptr != '\t' && *ptr != '\0' && *ptr != '\n' &&
++						*ptr != '=' && *ptr != ',') {
++			*string++ = *ptr++;
++	}
++	*string = '\0';
++	*uptr = ptr;
++	return;
++}
++
++#endif /* USELDAP */
+diff -urN radiusd-cistron-1.6.4.stock/src/radius.h radiusd-cistron-1.6.4/src/radius.h
+--- radiusd-cistron-1.6.4.stock/src/radius.h	Wed Aug 16 10:18:51 2000
++++ radiusd-cistron-1.6.4/src/radius.h	Thu Apr 12 16:28:15 2001
+@@ -177,6 +177,7 @@
+ #define PW_AUTHTYPE_SECURID		2
+ #define PW_AUTHTYPE_CRYPT		3
+ #define PW_AUTHTYPE_REJECT		4
++#define PW_AUTHTYPE_LDAP		252
+ #define PW_AUTHTYPE_PAM			253
+ #define PW_AUTHTYPE_ACCEPT		254
+ 
+diff -urN radiusd-cistron-1.6.4.stock/src/radiusd.c radiusd-cistron-1.6.4/src/radiusd.c
+--- radiusd-cistron-1.6.4.stock/src/radiusd.c	Mon Jul  3 04:49:20 2000
++++ radiusd-cistron-1.6.4/src/radiusd.c	Thu Apr 12 16:28:15 2001
+@@ -132,6 +132,13 @@
+ 	if (res == 0 && read_config_files() != 0)
+ 		res = -1;
+ 
++#ifdef USELDAP
++	if (radldap_init() != 0) {
++		log(L_ERR,"LDAP Error: LDAP could not be initialized");
++		res = -1;
++	}
++#endif
++
+ 	if (res != 0) {
+ 		if (pid == radius_pid) {
+ 			log(L_ERR|L_CONS,
+diff -urN radiusd-cistron-1.6.4.stock/src/radiusd.h radiusd-cistron-1.6.4/src/radiusd.h
+--- radiusd-cistron-1.6.4.stock/src/radiusd.h	Mon Aug 21 14:39:12 2000
++++ radiusd-cistron-1.6.4/src/radiusd.h	Thu Apr 12 17:13:47 2001
+@@ -34,6 +34,10 @@
+ #include "radius.h"
+ #include "conf.h"
+ 
++#ifdef USELDAP
++#include <lber.h>
++#include <ldap.h>
++#endif
+ /* Server data structures */
+ 
+ typedef struct dict_attr {
+@@ -282,3 +286,10 @@
+ /* timestr.c */
+ int		timestr_match(char *, time_t);
+ 
++/* ldap.c */
++#ifdef USELDAP
++#define MAX_AUTH_QUERY_LEN 256
++
++int radldap_init(void);
++int ldap_pass(char *, char *);
++#endif

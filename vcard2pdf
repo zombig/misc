@@ -1,0 +1,389 @@
+#!/usr/bin/php
+<?php
+
+/* vcard2pdf - Format vCard data into pretty day planner-sized sheets.
+ * Copyright 2005-7, John Morrissey <jwm@horde.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA02111-1307, USA.
+ */
+
+/* This script formats vCard data for printing on day planner-type pages.
+ * Horde's (http://horde.org/) Horde_iCalendar and File_PDF modules are
+ * required.
+ *
+ * Each physical (8.5" x 11", A4, or what have you) page contains several
+ * subpages. Each subpage is the size of a day planner sheet. The maximum
+ * number of subpages will be automatically placed on each physical page. 
+ * They are centered on the physical page so the PDF can be duplex printed
+ * (the front and back of the physical page will match up so you can print
+ * double-sided and cut the subpages to get double-sized day planner
+ * sheets).  At least, that's the idea if your printer doesn't have crappy
+ * page registration like mine does.
+ *
+ * The default settings generate pages that work with my day planner. 
+ * Everything is configurable, particularly the subpage size and layout, so
+ * you can have this script generate subpages that match the size and layout
+ * that your day planner expects.
+ *
+ * I would love feedback, especially if this script works for you with a
+ * differently-configured day planner. This works well for what mine
+ * expects, and I hope I've written it well enough that it will work with
+ * other day planner configurations with only configuration changes.
+ */
+
+/* CHANGES:
+ * v1.0 (27 August 2006):
+ * - Initial release.
+ *
+ * v1.1 (10 November 2007):
+ * - Update for Turba 2.1.5.
+ * - Flip opposite physical pages so subpages are printed correctly (i.e.,
+ *   not upside down on one side) when duplexed on the long edge.
+ */
+
+/* - We could probably re-work some of the funny logic (the $lastLetter
+ *   check in the display-contact loop, for example) and remove some of
+ *   the fudge factor in calculations (- 0.024 when displaying headings,
+ *   for example).
+ * - Non-person names (e.g., 'Facilities Management') don't sort properly
+ *   (a turba thing, in how it chooses which word of a name is the
+ *   surname).
+ */
+
+require_once '/var/www/www.horde.net/horde/lib/core.php';
+require_once 'Horde/iCalendar.php';
+require_once 'File/PDF.php';
+
+/* The filename containing your vCard data. */
+$VCF_FILENAME = 'contacts.vcf';
+/* Configuration for the physical (PDF) page. $PAGE['opts'] is passed
+ * directly to File_PDF.
+ */
+$PAGE = array(
+	'opts' => array(
+		'orientation' => 'P',
+		'unit' => 'in',
+		'format' => 'letter',
+	),
+);
+/* This is the exact size of each physical page in your day planner
+ * ("subpages," as we call them).
+ */
+$SUBPAGE = array(
+	'width' => 3.75,
+	'height' => 6.75,
+);
+$CONTENT = array(
+	/* Margins within each subpage. In other words, the distance from the
+	 * edge of the subpage to the content.
+	 */
+	'margin' => array(
+		'left' => 7/16,
+		'right' => 3/16,
+		'top' => 1/4,
+		'bottom' => 3/16,
+	),
+	'font' => array(
+		'face' => 'Helvetica',
+		'size' => 12,
+	),
+	/* Radius of the holes punched in each subpage. */
+	'holeRadius' => 3/32,
+	/* This configures two groups of holes; one group of three holes
+	 * starting 7/8" from the top of the subpage and 1/4" from the left,
+	 * 3/4" apart from each other. The second group is identical to the
+	 * first, but shifted down on the subpage.
+	 */
+	'holes' => array(
+		array('top' => 7/8,
+		      'left' => 1/4,
+		      'spacing' => 3/4,
+		      'count' => 3,
+		),
+		array('top' => 4 + 3/8,
+		      'left' => 1/4,
+		      'spacing' => 3/4,
+		      'count' => 3,
+		),
+	),
+);
+$CONTENT['width'] = $SUBPAGE['width'] - $CONTENT['margin']['left'] -
+	$CONTENT['margin']['right'];
+$CONTENT['height'] = $SUBPAGE['height'] - $CONTENT['margin']['top'] -
+	$CONTENT['margin']['bottom'];
+
+/* Height of each line of text. Couldn't figure out a good way to get this
+ * programmatically; it will need to be tweaked if the font size changes.
+ */
+$LINE_HEIGHT = 0.2;
+
+/* Attributes to display from vCard data. Keys are vCard attributes, the
+ * values are the "pretty" name for the attribute to display on the
+ * resulting PDF. The attributes are displayed in this order in the PDF.
+ */
+$ATTRS = array(
+	'FN' => 'Name',
+	'TITLE' => 'Title',
+	'ORG' => 'Org',
+	'EMAIL' => 'E-mail',
+	'TEL;HOME=' => 'H',
+	'TEL;WORK=' => 'W',
+	'TEL;CELL=' => 'M',
+	'TEL;FAX=' => 'F',
+	'NOTE' => 'Notes',
+	'ADR;HOME=' => 'H',
+	'ADR;WORK=' => 'W',
+);
+
+$vcards = &new Horde_iCalendar();
+$vcards->parsevCalendar(file_get_contents($VCF_FILENAME));
+foreach ($vcards->getComponents() as $com) {
+	$allValues = array();
+	foreach ($com->getAllAttributes() as $attr) {
+		$key = $attr['name'];
+		/* Join all the parameters together. */
+		if (!empty($attr['params'])) {
+			$key .= ';' . join(';', array_map(
+				create_function('$a, $b', 'return "$a=$b";'),
+				array_keys($attr['params']), array_values($attr['params'])
+			));
+		}
+		$allValues[$key] = array_filter($attr['values'], create_function('$a', 'if (!empty($a)) return $a;'));
+	}
+	$contacts[$allValues['N'][0] . $allValues['FN'][0]] = $allValues;
+	ksort($contacts);
+}
+
+$pdf = File_PDF::factory($PAGE['opts']);
+$result = $pdf->setFont($CONTENT['font']['face'], '', $CONTENT['font']['size']);
+if (PEAR::isError($result)) {
+	print $result->getMessage();
+	exit;
+}
+$pdf->open();
+
+/* There isn't a good way to determine the vertical length of a block of
+ * text, especially if it's long or wraps. Create a second page (never
+ * displayed) to use as a scratch pad. We'll write a contact entry to this
+ * page to determine its resulting length.
+ */
+$positionPage = File_PDF::factory($PAGE['opts']);
+$result = $positionPage->setFont($CONTENT['font']['face'], '',
+	$CONTENT['font']['size']);
+if (PEAR::isError($result)) {
+	print $result->getMessage();
+	exit;
+}
+$positionPage->open();
+
+$SUBPAGE['numX'] = floor($pdf->fw / $SUBPAGE['width']);
+$SUBPAGE['numY'] = floor($pdf->fh / $SUBPAGE['height']);
+$PAGE['margin'] = array(
+	'left' => ($pdf->fw - ($SUBPAGE['width'] * $SUBPAGE['numX'])) / 2,
+	'top' => ($pdf->fh - ($SUBPAGE['height'] * $SUBPAGE['numY'])) / 2,
+);
+
+$pageCount = 0;
+newPage($pdf);
+newPage($positionPage);
+/* newPage() increments $pageCount on every invocation, but we don't
+ * want it incremented when $positionPage isn't created, since that's just
+ * a dummy page used internally to determine sizing and page wrap.
+ */
+$pageCount = 1;
+$subpage = 1;
+$lastLetter = '';
+foreach ($contacts as $fn => $values) {
+	/* Draw a line after the previous entry if we're not displaying
+	 * a heading, or if it was the last entry on the previous page.
+	 */
+	if ($lastLetter == $values['N'][0][0] ||
+	    needNewPage($pdf, $positionPage, $values))
+    {
+		$pdf->newLine(($LINE_HEIGHT / 2) / 2);
+		$pdf->line($pdf->getX(), $pdf->getY(),
+			$pdf->getX() + $CONTENT['width'], $pdf->getY());
+		$pdf->newLine(($LINE_HEIGHT / 2) / 2);
+	}
+
+	if (needNewPage($pdf, $positionPage, $values)) {
+		if ($subpage == $SUBPAGE['numX'] * $SUBPAGE['numY']) {
+			newPage($pdf);
+			$subpage = 1;
+		} else {
+			++$subpage;
+			setSubpage($pdf, $subpage);
+		}
+
+		$pdf->setXY($pdf->getX() + $pdf->_line_width, $pdf->getY() - 0.024);
+		if ($lastLetter == $values['N'][0][0]) {
+			writeHeader($pdf, "$lastLetter, Continued");
+		} else {
+			$lastLetter = $values['N'][0][0];
+			writeHeader($pdf, $lastLetter);
+		}
+	} elseif ($lastLetter != $values['N'][0][0]) {
+		if ($lastLetter == '') {
+			/* Move the very first header up so it's flush with the top of
+			 * the content area.
+			 */
+			$pdf->setXY($pdf->getX() + $pdf->_line_width, $pdf->getY() - 0.024);
+		} else {
+			$pdf->setXY($pdf->getX() + $pdf->_line_width, $pdf->getY() + 0.03);
+		}
+		$lastLetter = $values['N'][0][0];
+
+		writeHeader($pdf, $lastLetter);
+	}
+
+	writeEntry($pdf, $values);
+}
+
+$pdf->close();
+$result = $pdf->output('contacts.pdf', true);
+if (PEAR::isError($result)) {
+	print $result->getMessage();
+	exit;
+}
+
+function newPage(&$pdf) {
+	global $PAGE, $SUBPAGE, $CONTENT;
+
+	++$GLOBALS['pageCount'];
+	$pdf->addPage();
+
+	for ($i = 0; $i < $SUBPAGE['numX'] * $SUBPAGE['numY']; ++$i) {
+		foreach ($CONTENT['holes'] as $group) {
+			for ($j = 0; $j < $group['count']; ++$j) {
+				/* Flip the physical page layout horizontally every other
+				 * physical page, so subpages match up back-to-back when
+				 * duplexed on the long edge.
+				 */
+				if ($GLOBALS['pageCount'] % 2 == 1) {
+					$pdf->circle($PAGE['margin']['left'] + $i * $SUBPAGE['width'] + $group['left'],
+						$PAGE['margin']['top'] + $group['top'] + ($j * $group['spacing']), $CONTENT['holeRadius']);
+				} else {
+					$pdf->circle($PAGE['margin']['left'] + ($i + 1) * $SUBPAGE['width'] - $group['left'],
+						$PAGE['margin']['top'] + $group['top'] + ($j * $group['spacing']), $CONTENT['holeRadius']);
+				}
+			}
+		}
+
+		$pdf->rect($PAGE['margin']['left'] + $i * $SUBPAGE['width'],
+			$PAGE['margin']['top'],
+			$SUBPAGE['width'], $SUBPAGE['height']);
+
+		/* Flip the physical page layout horizontally every other physical
+		 * page, so subpages match up back-to-back when duplexed on the
+		 * long edge.
+		 */
+		if ($GLOBALS['pageCount'] % 2 == 1) {
+			$pdf->rect($PAGE['margin']['left'] + $i * $SUBPAGE['width'] + $CONTENT['margin']['left'],
+				$PAGE['margin']['top'] + $CONTENT['margin']['top'],
+				$CONTENT['width'], $CONTENT['height']);
+		} else {
+			$pdf->rect($PAGE['margin']['left'] + $i * $SUBPAGE['width'] + $CONTENT['margin']['right'],
+				$PAGE['margin']['top'] + $CONTENT['margin']['top'],
+				$CONTENT['width'], $CONTENT['height']);
+		}
+	}
+
+	setSubpage($pdf, 1);
+}
+
+function setSubpage(&$pdf, $subpage) {
+	global $PAGE, $SUBPAGE, $CONTENT;
+
+	/* Flip the physical page layout horizontally every other physical page,
+	 * so subpages match up back-to-back when duplexed on the long edge.
+	 */
+	if ($GLOBALS['pageCount'] % 2 == 1) {
+		$pdf->setXY($PAGE['margin']['left'] + (($subpage - 1) * $SUBPAGE['width']) + $CONTENT['margin']['left'],
+			$PAGE['margin']['top'] + $CONTENT['margin']['top'] + .05);
+		$pdf->setMargins($PAGE['margin']['left'] + ($subpage - 1) * $SUBPAGE['width'] + $CONTENT['margin']['left'],
+			$PAGE['margin']['top'] + $CONTENT['margin']['top'] + .05,
+			$pdf->fw - ($subpage * $SUBPAGE['width'] - $CONTENT['margin']['right']));
+	} else {
+		$pdf->setXY($PAGE['margin']['left'] + (($subpage - 1) * $SUBPAGE['width']) + $CONTENT['margin']['right'],
+			$PAGE['margin']['top'] + $CONTENT['margin']['top'] + .05);
+		$pdf->setMargins($PAGE['margin']['left'] + ($subpage - 1) * $SUBPAGE['width'] + $CONTENT['margin']['right'],
+			$PAGE['margin']['top'] + $CONTENT['margin']['top'] + .05,
+			$pdf->fw - ($subpage * $SUBPAGE['width'] - $CONTENT['margin']['right']));
+	}
+}
+
+function writeHeader(&$pdf, $text) {
+	global $LINE_HEIGHT, $CONTENT;
+
+	$pdf->setFillColor('gray', .75);
+	$pdf->rect($pdf->getX(), $pdf->getY() - 0.02,
+		$CONTENT['width'] - 2 * $pdf->_line_width, $LINE_HEIGHT + 0.03, 'F');
+	$pdf->setFillColor('gray', 0);
+
+	$pdf->setFont($CONTENT['font']['face'], 'B', $CONTENT['font']['size']);
+	$pdf->write($LINE_HEIGHT, $text);
+	$pdf->setFont($CONTENT['font']['face'], '', $CONTENT['font']['size']);
+	$pdf->newLine($LINE_HEIGHT + 0.03);
+}
+
+function writeEntry(&$pdf, $values) {
+	global $ATTRS, $CONTENT, $LINE_HEIGHT;
+
+	foreach ($ATTRS as $vcard => $pretty) {
+		if (count($values[$vcard]) == 0) {
+			continue;
+		}
+
+		if ($pretty == 'Name') {
+			$pdf->setFont($CONTENT['font']['face'], 'B',
+				$CONTENT['font']['size']);
+			$pdf->write($LINE_HEIGHT, rtrim(join(', ', $values[$vcard])));
+			$pdf->setFont($CONTENT['font']['face'], '',
+				$CONTENT['font']['size']);
+		} elseif ($vcard == 'ADR;HOME' || $vcard == 'ADR;WORK') {
+			$pdf->write($LINE_HEIGHT, $pretty . ': ' .
+				str_replace("\n", ', ',
+					preg_replace("/\n$/", '', join(', ', $values[$vcard]))
+				)
+			);
+		} else {
+			$pdf->write($LINE_HEIGHT, $pretty . ': ' .
+				join(', ', $values[$vcard]));
+		}
+		$pdf->newLine($LINE_HEIGHT);
+	}
+}
+
+function needNewPage(&$pdf, &$positionPage, $values) {
+	global $PAGE, $CONTENT;
+
+	$positionPage->setXY($pdf->getX(), $pdf->getY());
+	writeEntry($positionPage, $values);
+
+	/* Time for a new page? For some reason, $positionPage's Y position
+	 * might wrap to the next page, even though the entry isn't wrapped
+	 * when we display the PDF. Strange, but checking for this case makes
+	 * everything work.
+	 */
+	/* FIXME: 'Y + n' is a guesstimate. */
+	if ($positionPage->getY() + 0.75 >
+	    	$PAGE['margin']['top'] + $CONTENT['margin']['top'] +
+	    	$CONTENT['height'] ||
+	    $positionPage->getY() < $pdf->getY())
+	{
+		return true;
+	}
+	return false;
+}

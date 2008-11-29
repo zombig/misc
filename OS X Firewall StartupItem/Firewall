@@ -1,0 +1,129 @@
+#!/bin/sh
+
+# Firewall StartupItem for Mac OS X, by John Morrissey
+# Released into the public domain.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+# To use, place this directory in /Library/StartupItems/. It can be disabled
+# by adding FIREWALL=-NO- to /etc/hostconfig.
+
+# Thanks to the following:
+# Peter Hickman, http://www.macdevcenter.com/pub/a/mac/2005/03/15/firewall.html
+# Henrik Lund Kramshoej, http://www.inet6.dk/firewall.html
+
+. /etc/rc.common
+
+if [ "${FIREWALL:=-YES-}" = "-YES-" ]; then
+	ConsoleMessage "Activating the firewall"
+
+	# Clear any existing rules first.
+	ipfw -f flush >/dev/null
+	ip6fw -f flush >/dev/null
+
+	sysctl -w net.inet.ip.fw.verbose=1 >/dev/null
+
+
+	# TODO:
+	# * Need to manually look up all A records for NTP servers and
+	#   add allow rules for each? Specifying the hostname only adds
+	#   for the first A record.
+	# * Look up tunnel remote IPv4 endpoint instead of hard-coding.
+	# * Look up time server rules and allow IPv6 traffic from those IP
+	#   addresses, too.
+	# * Add rules allowing IPv6 neighbor discovery?
+	# * Does multicast DNS ever use IPv6?
+	# * Do we really want to drop all multicast traffic?
+
+	ipfw add check-state >/dev/null
+
+	# Loopback sanity.
+	ipfw  add allow    ip from any to any via lo0 >/dev/null
+	ipfw  add deny log ip from any to 127.0.0.0/8 >/dev/null
+	ip6fw add allow    ipv6 from any to any via lo0 >/dev/null
+	ip6fw add deny log ipv6 from any to ::1 >/dev/null
+
+	# Allow IPv6 tunnel traffic.
+	ipfw add allow ip from 66.55.128.25 to any proto 41 in >/dev/null
+
+	# Permit ISAKMP traffic for endpoints configured in the Cisco VPN client.
+	# Its kernel module bypasses the firewall for ESP traffic, but we can
+	# still use the firewall to control traffic that passes *through* the
+	# tunnel.
+	for profile in /etc/CiscoSystemsVPNClient/Profiles/*; do
+		endpoint=$(grep '^Host=' $profile | cut -d= -f2)
+		ipfw  add accept udp from $endpoint isakmp to any in >/dev/null
+		ip6fw add accept udp from ::ffff:$endpoint isakmp to any in >/dev/null
+	done
+
+	# Keep state for outbound connections and allow corresponding
+	# inbound traffic.
+	ipfw add allow tcp from any to any out setup keep-state >/dev/null
+	ipfw add allow udp from any to any out keep-state >/dev/null
+	# Hm, ip6fw(8) doesn't support state? We'll add static entries to allow
+	# responses to outgoing connections.
+	ip6fw add allow tcp from any to any in established >/dev/null
+	ip6fw add allow ipv6 from any to any in frag >/dev/null
+
+	# Dynamically allow DNS replies based on outbound DNS request traffic.
+	ipfw add accept udp from any to any 53 out keep-state >/dev/null
+	ipfw add accept tcp from any to any 53 out setup keep-state >/dev/null
+	# Hm, ip6fw(8) doesn't support state? We'll add static entries.
+	for server in $(scutil --dns | grep nameserver | cut -d: -f2-7); do
+		if ! echo $server | grep --quiet :; then
+			server=::ffff:$server
+		fi
+		ip6fw add accept udp from $server domain to any in >/dev/null
+		ip6fw add accept tcp from $server domain to any in >/dev/null
+	done
+	# Allow multicast DNS.
+	ipfw add allow udp from any to 224.0.0.0/3 5353 in >/dev/null
+
+	for server in $(grep '^server[[:space:]]' /etc/ntp.conf | \
+	                sed 's/^server[[:space:]]*\([^[:space:]]*\)[[:space:]].*/\1/')
+	do
+		# Apple's time servers only have IPv4 addresses as of 1 Jan 2006.
+		ipfw add accept udp from $server ntp to any ntp in >/dev/null
+	done
+
+	# Allow SSH access from anywhere.
+	ipfw  add allow tcp from any to any ssh in setup >/dev/null
+	ip6fw add allow tcp from any to any ssh in setup >/dev/null
+
+	# Allow DHCP traffic.
+	ipfw add allow udp from any 67 to any 68 in >/dev/null
+
+	# Allow limited ICMPv4: 3 (destination unreachable), 4 (source quench),
+	# 8 (echo request), 11 (time exceeded).
+	ipfw add allow icmp from any to any icmptypes 3,4,8,11 in >/dev/null
+
+	# Allow limited ICMPv6: 1 (destination unreachable), 2 (packet too big),
+	# 3 (time exceeded), and 128 (echo request). This blocks neighbor
+	# discovery, which are 135 (neighbor solicitation) and 136 (neighbor
+	# discovery).
+	ip6fw add allow ipv6-icmp from any to any icmptypes 1,2,3,128 in >/dev/null
+
+	# Drop multicast. FIXME: is ff00::/8 correct?
+	ipfw  add deny log ip   from 224.0.0.0/3 to any in >/dev/null
+	ipfw  add deny log ip   from any to 224.0.0.0/3 in >/dev/null
+	ip6fw add deny log ipv6 from ff00::/8 to any in >/dev/null
+	ip6fw add deny log ipv6 from any to ff00::/8 in >/dev/null
+
+	# Block (and don't complain about) SLP (Service Location Protocol,
+	# RFC 2165). Warning: this will prevent automation detection of network
+	# services, such as printers and file servers.
+	ipfw  add deny udp from any to any 427 in >/dev/null
+	ip6fw add deny udp from any to any 427 in >/dev/null
+
+	# Don't complain about malware probing.
+	ipfw  add deny tcp from any to any 135,137,138,139,445,6890 in >/dev/null
+	ip6fw add deny tcp from any to any 135,137,138,139,445,6890 in >/dev/null
+	ipfw  add deny udp from any to any 138,1026,1027,1030,1033 in >/dev/null
+	ip6fw add deny udp from any to any 138,1026,1027,1030,1033 in >/dev/null
+
+	# Deny all other connections.
+	ipfw  add deny log ip from any to any in >/dev/null
+	ip6fw add deny log ipv6 from any to any in >/dev/null
+fi

@@ -1,0 +1,28 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## DP: commit 433992361ce95a1da76b76c9c24d4c957b058aff
+## DP: Author: Al Viro <viro@ftp.linux.org.uk>
+## DP: Date:   Tue Oct 4 17:36:04 2005 +0100
+## DP: 
+## DP:     [PATCH] missing include in megaraid_sas
+## DP:     
+## DP:     megaraid_sas depends on arch-specific indirect includes pulling
+## DP:     fs.h in; on alpha they do not.
+## DP:     
+## DP:     Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>
+## DP:     Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+## DP:
+## DP: Compiler: John Morrissey <jwm@horde.net>
+
+@DPATCH@
+diff --git a/drivers/scsi/megaraid/megaraid_sas.c b/drivers/scsi/megaraid/megaraid_sas.c
+index 1b3148e..c3f6373 100644
+--- a/drivers/scsi/megaraid/megaraid_sas.c
++++ b/drivers/scsi/megaraid/megaraid_sas.c
+@@ -34,6 +34,7 @@ #include <linux/interrupt.h>
+ #include <linux/delay.h>
+ #include <linux/uio.h>
+ #include <asm/uaccess.h>
++#include <linux/fs.h>
+ #include <linux/compat.h>
+ 
+ #include <scsi/scsi.h>

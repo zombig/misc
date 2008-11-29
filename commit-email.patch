@@ -1,0 +1,73 @@
+--- commit-email.pl	2004-11-15 18:08:16.000000000 +0000
++++ commit-email.pl.new	2005-01-12 20:08:30.000000000 +0000
+@@ -103,7 +103,8 @@
+                        '-l'     => 'log_file',
+                        '-m'     => '',
+                        '-r'     => 'reply_to',
+-                       '-s'     => 'subject_prefix');
++                       '-s'     => 'subject_prefix',
++                       '-n'     => 'num_diff_lines');
+ 
+ while (@ARGV)
+   {
+@@ -125,6 +126,10 @@
+         if ($hash_key)
+           {
+             $current_project->{$hash_key} = $value;
++            if ($hash_key eq 'num_diff_lines' && $value !~ /^\d+$/)
++              {
++                die "$0: argument to command line option $arg must be numeric.\n";
++              }
+           }
+         else
+           {
+@@ -359,7 +364,6 @@
+ push(@body, "Log:\n");
+ push(@body, @log);
+ push(@body, "\n");
+-push(@body, map { /[\r\n]+$/ ? $_ : "$_\n" } @difflines);
+ 
+ # Go through each project and see if there are any matches for this
+ # project.  If so, send the log out.
+@@ -385,6 +389,7 @@
+     my $log_file        = $project->{log_file};
+     my $reply_to        = $project->{reply_to};
+     my $subject_prefix  = $project->{subject_prefix};
++    my $num_diff_lines  = $project->{num_diff_lines};
+     my $subject;
+ 
+     if ($commondir ne '')
+@@ -453,6 +458,15 @@
+         if (open(SENDMAIL, "| $command"))
+           {
+             print SENDMAIL @head, @body;
++            if ($num_diff_lines > 0 && $#difflines + 1 > $num_diff_lines)
++              {
++                @difflines = @difflines[0 .. $num_diff_lines - 1];
++                push(@difflines, "---------------------------------\n");
++                push(@difflines, "Diffs truncated at $num_diff_lines lines.\n");
++                push(@difflines, "---------------------------------\n");
++              }
++            @difflines = map { /[\r\n]+$/ ? $_ : "$_\n" } @difflines;
++            print SENDMAIL @difflines;
+             close SENDMAIL
+               or warn "$0: error in closing `$command' for writing: $!\n";
+           }
+@@ -491,6 +505,7 @@
+       "  -m regex              Regular expression to match committed path\n",
+       "  -r email_address      Email address for 'Reply-To:'\n",
+       "  -s subject_prefix     Subject line prefix\n",
++      "  -n num_diff_lines     Maximum number of diff lines to include\n",
+       "\n",
+       "This script supports a single repository with multiple projects,\n",
+       "where each project receives email only for commits that modify that\n",
+@@ -522,7 +537,8 @@
+           log_file        => '',
+           match_regex     => '.',
+           reply_to        => '',
+-          subject_prefix  => ''};
++          subject_prefix  => '',
++          num_diff_lines  => ''};
+ }
+ 
+ # Start a child process safely without using /bin/sh.

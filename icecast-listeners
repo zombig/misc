@@ -1,0 +1,143 @@
+#!/usr/bin/python -tt
+
+# icecast streaming listeners display v1.0.1
+# Copyright (c) 2008, John Morrissey <jwm@horde.net>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+#	* Redistributions of source code must retain the above copyright notice,
+#	  this list of conditions and the following disclaimer.
+#	* Redistributions in binary form must reproduce the above copyright
+#	  notice, this list of conditions and the following disclaimer in the
+#	  documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+# IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+STREAMS = ["stream1", "stream2"]
+ICECAST_ADMIN_URL = "http://streaming.example.com:8000/admin"
+ICECAST_ADMIN_USER = "admin"
+ICECAST_ADMIN_PASSWORD = ""
+
+
+import os
+from socket import gethostbyaddr
+import sys
+from time import strftime
+import urllib2
+from xml.dom import minidom
+
+
+# Icecast's built-in web server is fairly basic and doesn't like
+# doubled-up slashes.
+while ICECAST_ADMIN_URL[-1] == "/":
+	ICECAST_ADMIN_URL = ICECAST_ADMIN_URL[:-1]
+
+password_mgr = urllib2.HTTPPasswordMgrWithDefaultRealm()
+password_mgr.add_password(None, ICECAST_ADMIN_URL,
+	ICECAST_ADMIN_USER, ICECAST_ADMIN_PASSWORD)
+handler = urllib2.HTTPBasicAuthHandler(password_mgr)
+opener = urllib2.build_opener(handler)
+
+print "Content-type: text/html\n\n",
+print """
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+	<title>Icecast Streaming Listeners</title>
+	<meta http-equiv="refresh" content="60; url=%s" />
+	<style type="text/css">
+	<!--
+		body {
+			font-size: 0.85em;
+			font-family: Geneva,Arial,Helvetica,sans-serif;
+		}
+		h3 {
+			margin-bottom: 0.25em;
+		}
+		table {
+			border-collapse: collapse;
+			empty-cells: show;
+		}
+		tr.listener:hover {
+			background-color: #aabbbb;
+		}
+		td {
+			border: 1px solid black;
+			padding: 2px;
+		}
+		img {
+			border: 0;
+		}
+	-->
+	</style>
+</head>
+
+<body>
+""" % (os.environ.get("REQUEST_URI", os.path.basename(sys.argv[0])))
+
+def plural(count):
+	if count == 0 or count > 1:
+		return "s"
+	return ""
+
+for stream in STREAMS:
+	try:
+		data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + stream)
+		dom = minidom.parse(data)
+	except Exception, e:
+		print "<h3>Unable to retrieve listener information for %s stream: %s</h3>" % \
+			(stream, str(e))
+		continue
+
+	for source in dom.getElementsByTagName("source"):
+		count = int(source.getElementsByTagName("Listeners")[0].firstChild.data)
+
+		print "<h3>%s Streaming Listener%s on %s (as of %s)</h3>" % \
+			(count or "No", plural(count),
+			 source.getAttribute("mount"), strftime("%B %d, %H:%M %Z"))
+
+		if count > 0:
+			print """
+				<table>
+				<tr>
+					<td>Hostname</td>
+					<td>Connected For (minutes)</td>
+					<td>Software</td>
+				</tr>
+			"""
+
+			for listener in source.getElementsByTagName("listener"):
+				host = listener.getElementsByTagName("IP")[0].firstChild.data
+				try:
+					host = gethostbyaddr(host)[0]
+				except:
+					# No reverse DNS; c'est la vie.
+					pass
+				print "<tr class=\"listener\"><td>%s</td><td>%s</td><td>%s</td></tr>" % \
+					(host,
+					 int(listener.getElementsByTagName("Connected")[0].firstChild.data) / 60,
+					 listener.getElementsByTagName("UserAgent")[0].firstChild.data)
+
+			print "</table>"
+
+print """
+<p style="text-align: right;">
+	<img src="http://www.w3.org/Icons/valid-xhtml10"
+	     alt="Valid XHTML 1.0 Strict" height="31" width="88" />
+</p>
+</body>
+</html>
+"""

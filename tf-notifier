@@ -1,0 +1,434 @@
+#!/usr/bin/python -tt
+
+# TinyFugue notifier v1.4.1
+# Copyright (c) 2008, Matthew J. Ernisse <mernisse@ub3rgeek.net>
+# Copyright (c) 2008, John Morrissey <jwm@horde.net>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+#   * Redistributions of source code must retain the above copyright notice,
+#     this list of conditions and the following disclaimer.
+#   * Redistributions in binary form must reproduce the above copyright
+#     notice, this list of conditions and the following disclaimer in the
+#     documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+# IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+# Change history:
+# v1.4.1:
+# - Handle log file rotation gracefully.
+# - Catch getopt exceptions while parsing .tfrc /def entries.
+# - Small readability improvements.
+#
+# v1.4:
+# - Added 'when' backlogged support.
+# - Greatly improved notification channel documentation.
+# - Make certain method configuration directives optional and choose useful
+#   defaults.
+# - Enforce the presence of required method configuration directives (at
+#   startup) instead of crashing and burning later.
+#
+# v1.3.1:
+# - Initial public release.
+
+# Notification channel configuration:
+# - notify_after: optional number of seconds to wait after a message is
+#     received before sending a notification via this channel. Useful for
+#     batching notifications together (sending more matched lines in each
+#     notification that is triggered). Defaults to 0 (notify immediately).
+# - when: optional array limiting when notifications should be sent.
+#   - backlogged: only send notifications when backlogged (i.e., the
+#       world is paused and "More" is displayed in the status bar).
+#
+#       As of TinyFugue 5.0beta8 (the latest available as of this writing),
+#       a patch (http://horde.net/~jwm/software/misc/tf-nomore.patch) is
+#       needed to add the NOMORE hook to TinyFugue. Once TinyFugue is
+#       patched, add these hooks to your ~/.tfrc:
+#
+#         /hook MORE = /sys chmod -t ~/.tf.log
+#         /hook NOMORE = /sys chmod +t ~/.tf.log
+# - method: required method for sending notifications. A notification
+#     method can have multiple channels defined. See below for list of
+#     supported methods and information on their configuration.
+# 
+# Methods:
+# - growl
+#   Sends notifications to a remove Mac OS X Growl (http://growl.info/)
+#   server.
+#   - appname: optional application name. Defaults to the basename of this
+#       script (usually 'tf-notifier').
+#   - title: required notification title.
+#   - host: required Growl server hostname or address.
+#   - password: required Growl server password.
+#
+# - libnotify
+#   Sends notifications to Gnome's notification framework.
+#   - title: required notification title.
+#   - urgency: optional notification urgency. Possible values are 'low',
+#       'normal', and 'urgent'. Defaults to 'low'.
+#
+# - smtp
+#   Sends notification e-mail messages via SMTP.
+#   - from: required message source address.
+#   - to: required message destination address.
+#   - subject: required message subject.
+#   - server: optional SMTP server. Defaults to 'localhost'.
+#   - port: optional SMTP port. Defaults to port 25.
+#
+# - stdout
+#   Displays notifications on standard out. Generally useful only for
+#   debugging tf-notifier.
+#
+# Examples:
+#   Send notifications via SMTP to a mobile phone. Batch notifications up
+#   in 60 second intervals to conserve SMSes.
+#	{
+#		'notify_after': 60,
+#		'when': ['backlogged'],
+#		'method': 'smtp',
+#		'from': 'user@example.com',
+#		'to': '0000000000@mms.att.com',
+#		'subject': 'TinyFugue notification',
+#	},
+#
+#   Send notifications to a remote Mac using Growl.
+#	{
+#		'method': 'growl',
+#		'appname': 'tf-notifier',
+#		'title': 'TinyFugue',
+#		'host': '192.168.0.1',
+#		'password': 'foobar',
+#	},
+#
+#   Send notifications to Gnome via libnotify.
+#	{
+#		'method': 'libnotify',
+#		'title': 'TinyFugue',
+#		'urgency': 'low',
+#	},
+#
+#   Print notifications to standard out, for debugging or trouleshooting.
+#	{
+#		'method': 'stdout',
+#	},
+NOTIFICATION = [
+]
+
+from email.Message import Message
+from getopt import getopt, GetoptError
+import os
+from os.path import basename
+import re
+from smtplib import SMTP
+from stat import *
+import sys
+from syslog import *
+from time import sleep, time
+
+def usage():
+	print """Usage: %s [-c|--config FILE] [-m|--macro NAME] [LOGFILE]
+Watch a TinyFugue log file and send notifications when highlighted text
+is received.
+
+    -c, --config       path to .tfrc (~/.tfrc by default)
+    -h, --help         display this help and exit
+    -m, --macro=NAME   only pay attention to the specified macros""" % \
+	basename(sys.argv[0])
+
+try:
+	opts, args = getopt(sys.argv[1:], 'hm:', ['help', 'macro='])
+except GetoptError, e:
+	print >>sys.stderr, str(e)
+	usage()
+	sys.exit(2)
+
+TFRC = '~/.tfrc'
+MACROS = []
+for opt in opts:
+	if opt[0] == '-c' or opt[0] == '--config':
+		TFRC = opt[1]
+	elif opt[0] == '-h' or opt[0] == '--help':
+		usage()
+		sys.exit(0)
+	elif opt[0] == '-m' or opt[0] == '--macro':
+		MACROS.append(opt[1])
+
+def parse_arg_string(argstr):
+	"""Parse a string containing arguments into an array of arguments
+	as they would appear in (for example) sys.argv."""
+
+	# FIXME: would be nice if this supported backslash escaping
+	# of quotes.
+	in_quoted = False
+	begin_index = 0
+	args = []
+	for i in range(len(argstr)):
+		char = argstr[i]
+		if not in_quoted and (char == ' ' or char == '\t'):
+			args.append(argstr[begin_index:i])
+			begin_index = i + 1
+		elif char == '"' or char == "'":
+			in_quoted = in_quoted == False
+	args.append(argstr[begin_index:i + 1])
+	return args
+
+LOG_NAME = None
+PATTERNS = []
+try:
+	tfrc = open(os.path.expanduser(TFRC))
+	for line in tfrc:
+		line = line.strip()
+
+		if re.search(r'^/log\s', line):
+			LOG_NAME = re.sub(r'^/log\s+', '', line)
+		elif re.search(r'^/def\s', line):
+			pattern = None
+			is_highlighted = False
+			# getopt() expects a list of arguments instead of an argument
+			# string, so we'll have to split it ourselves.
+			try:
+				tf_opts, tf_args = getopt(
+					parse_arg_string(re.sub(r'^/def\s', '', line)),
+					'm:n:E:t:h:b:B:p:c:w:T:Fa:P:fiIq1')
+			except GetoptError, e:
+				# We'd like to be resilient in the face of unknown
+				# arguments (say, if newer versions of tf(1) add
+				# new arguments to /def), but it appears getopt()
+				# doesn't provide a way to do that.
+				print >>sys.stderr, 'Unable to parse /def in %s: %s' % (TFRC, str(e))
+				sys.exit(1)
+			for opt in tf_opts:
+				if opt[0] == '-P':
+					is_highlighted = True
+				elif opt[0] == '-t':
+					# Dispel quoting if present.
+					if opt[1][0] == "'" and opt[1][-1] == "'":
+						pattern = opt[1][1:-1]
+					elif opt[1][0] == '"' and opt[1][-1] == '"':
+						pattern = opt[1][1:-1]
+					else:
+						pattern = opt[1]
+
+			if len(MACROS) and len(tf_args) >= 1:
+				if tf_args[0] not in MACROS:
+					continue
+
+			if pattern and is_highlighted:
+				PATTERNS.append(re.compile(pattern))
+	tfrc.close()
+except Exception, e:
+	print >>sys.stderr, 'Unable to process .tfrc: %s' % str(e)
+	sys.exit(1)
+
+if len(args) > 1:
+	print >>sys.stderr, 'Only one TinyFugue log file may be specified.'
+	usage()
+	sys.exit(1)
+elif len(args) == 1:
+	LOG_NAME = args[0]
+elif len(args) == 0:
+	# Flail randomly at a log file name if the .tfrc didn't have one.
+	if not LOG_NAME:
+		LOG_NAME = '.tf.log'
+
+try:
+	file = open(LOG_NAME, 'r')
+
+	log_stat = os.stat(LOG_NAME)
+	log_inode = log_stat[ST_INO]
+	
+	# Start looking at the end of the file.
+	file.seek(log_stat[ST_SIZE])
+except OSError, e:
+	print '%s: %s' % (LOG_NAME, str(e))
+	sys.exit(1)
+
+queued = []
+for n in NOTIFICATION:
+	n['lines'] = []
+	n['last_sent'] = time()
+	if n['method'] == 'smtp':
+		if 'from' not in n:
+			print >>sys.stderr, '%s: "from" is a required configuration item for the smtp method.' % basename(sys.argv[0])
+			sys.exit(1)
+		if 'to' not in n:
+			print >>sys.stderr, '%s: "to" is a required configuration item for the smtp method.' % basename(sys.argv[0])
+			sys.exit(1)
+		if 'subject' not in n:
+			print >>sys.stderr, '%s: "subject" is a required configuration item for the smtp method.' % basename(sys.argv[0])
+			sys.exit(1)
+
+		try:
+			n['msg'] = Message()
+			n['msg']['From'] = n['from']
+			n['msg']['To'] = n['to']
+			n['msg']['Subject'] = n['subject']
+		except Exception, e:
+			print >>sys.stderr, 'Unable to initialize smtp: %s' % str(e)
+			sys.exit(1)
+	elif n['method'] == 'growl':
+		if 'title' not in n:
+			print >>sys.stderr, '%s: "title" is a required configuration item for the growl method.' % basename(sys.argv[0])
+			sys.exit(1)
+		if 'host' not in n:
+			print >>sys.stderr, '%s: "host" is a required configuration item for the growl method.' % basename(sys.argv[0])
+			sys.exit(1)
+		if 'password' not in n:
+			print >>sys.stderr, '%s: "password" is a required configuration item for the growl method.' % basename(sys.argv[0])
+			sys.exit(1)
+
+		try:
+			from netgrowl import GROWL_UDP_PORT, GrowlRegistrationPacket, \
+				GrowlNotificationPacket
+			from socket import socket, AF_INET, SOCK_DGRAM
+
+			p = GrowlRegistrationPacket(application=n['appname'],
+				password=n['password'])
+			p.addNotification()
+
+			addr = (n['host'], GROWL_UDP_PORT)
+			n['sock'] = socket(AF_INET, SOCK_DGRAM)
+			n['sock'].sendto(p.payload(), addr)
+		except Exception, e:
+			print >>sys.stderr, 'Unable to initialize growl: %s' % str(e)
+			sys.exit(1)
+	elif n['method'] == 'libnotify':
+		if 'title' not in n:
+			print >>sys.stderr, '%s: "title" is a required configuration item for the libnotify method.' % basename(sys.argv[0])
+			sys.exit(1)
+
+		try:
+			import pynotify
+			if not pynotify.is_initted():
+				pynotify.init(n['appname'])
+		except Exception, e:
+			print >>sys.stderr, 'Unable to initialize libnotify: %s' % str(e)
+			sys.exit(1)
+
+openlog(basename(sys.argv[0]), LOG_PID)
+
+while True:
+	# Read all new log lines.
+	while True:
+		# If the log's inode has changed, it's probably been rotated.
+		# Start following the new log from the beginning.
+		try:
+			log_stat = os.stat(LOG_NAME)
+			if log_stat[ST_INO] != log_inode:
+				log_inode = log_stat[ST_INO]
+				file = open(LOG_NAME, 'r')
+		except OSError, e:
+			syslog(LOG_ERR,
+				'Error while checking for %s rotation, retrying: %s' %
+				(LOG_NAME, str(e)))
+			try:
+				sleep(5)
+			except KeyboardInterrupt:
+				closelog()
+				sys.exit(0)
+			continue
+
+		# If the log file is sticky, tf's screen is current (i.e., no More
+		# indicator and therefore not in backscroll).
+		#
+		# We want to catch the sticky bit state as soon as possible to
+		# minimize lag between when it's set/cleared and when this loop
+		# rolls over.
+		sticky = (os.stat(LOG_NAME)[ST_MODE] & S_ISVTX) == S_ISVTX
+
+		where = file.tell()
+		line = file.readline().rstrip()
+
+		if not line:
+			file.seek(where)
+			break
+		for pattern in PATTERNS:
+			if pattern.search(line):
+				for n in NOTIFICATION:
+					if 'backlogged' in n.get('when', []) and sticky:
+						continue
+					# FIXME: 'when' screen detached support.
+
+					n['lines'].append(line)
+				break
+
+	for n in NOTIFICATION:
+		if not n['lines']:
+			continue
+		if n['last_sent'] + n.get('notify_after', 0) > time():
+			continue
+
+		if n['method'] == 'smtp':
+			try:
+				smtp = SMTP(n.get('server', 'localhost'),
+					n.get('port', 25))
+				smtp.sendmail(n['from'], n['to'],
+					str(n['msg']) + '\n'.join(n['lines']))
+				smtp.quit()
+
+				n['last_sent'] = time()
+				n['lines'] = []
+			except Exception, e:
+				syslog(LOG_ERR,
+					'Unable to send SMTP notification (%d lines): %s' %
+					(len(n['lines']), str(e)))
+		elif n['method'] == 'growl':
+			try:
+				p = GrowlNotificationPacket(
+					password=n['password'],
+					application=n.get('appname', basename(sys.argv[0])),
+					title=n['title'], description='\n'.join(n['lines']))
+            
+				addr = (n['host'], GROWL_UDP_PORT)
+				n['sock'].sendto(p.payload(), addr)
+
+				n['last_sent'] = time()
+				n['lines'] = []
+			except Exception, e:
+				syslog(LOG_ERR,
+					'Unable to send growl notification (%d lines): %s' %
+					(len(n['lines']), str(e)))
+		elif n['method'] == 'libnotify':
+			try:
+				l = pynotify.Notification(n['title'], '\n'.join(n['lines']))
+				l.set_urgency(
+					{'low': pynotify.URGENCY_LOW,
+					 'normal': pynotify.URGENCY_NORMAL,
+					 'urgent': pynotify.URGENCY_URGENT,
+					}[n.get('urgency', 'low')]
+				)
+				l.show()
+
+				n['last_sent'] = time()
+				n['lines'] = []
+			except Exception, e:
+				syslog(LOG_ERR,
+					'Unable to send libnotify notification (%d lines): %s' %
+					(len(n['lines']), str(e)))
+		elif n['method'] == 'stdout':
+			print '\n'.join(n['lines'])
+
+			n['last_sent'] = time()
+			n['lines'] = []
+
+	try:
+		sleep(5)
+	except KeyboardInterrupt:
+		closelog()
+		sys.exit(0)
+
+closelog()

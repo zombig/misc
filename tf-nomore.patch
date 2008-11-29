@@ -1,0 +1,37 @@
+Adds a NOMORE hook to TinyFugue that is triggered when a user catches
+up with backscroll and is no longer backlogged (i.e., the works is no longer
+paused and "More" is no longer displayed in the status bar).
+
+Useful when combined with tf-notifier's
+(http://horde.net/~jwm/software/misc/tf-notifier) 'backlogged' notification
+limitation.
+
+https://sourceforge.net/tracker2/?func=detail&aid=2242483&group_id=186112&atid=915975
+
+Author: John Morrissey <jwm@horde.net>
+Distributed under the same terms as TinyFugue 5.0beta8.
+
+diff -urN tf-50b8/src/hooklist.h /home/jwm/tf-50b8/src/hooklist.h
+--- tf-50b8/src/hooklist.h	2007-01-13 18:12:39.000000000 -0500
++++ /home/jwm/tf-50b8/src/hooklist.h	2008-10-25 12:42:27.000000000 -0400
+@@ -28,6 +28,7 @@
+ gencode(MAIL,		HT_ALERT),
+ gencode(MORE,		0),
+ gencode(NOMACRO,	0),
++gencode(NOMORE,		0),
+ gencode(PENDING,	HT_WORLD | HT_XSOCK),
+ gencode(PREACTIVITY,	0),
+ gencode(PROCESS,	0),
+diff -urN tf-50b8/src/output.c /home/jwm/tf-50b8/src/output.c
+--- tf-50b8/src/output.c	2007-01-13 19:44:19.000000000 -0500
++++ /home/jwm/tf-50b8/src/output.c	2008-10-25 12:52:12.000000000 -0400
+@@ -2949,6 +2949,9 @@
+ 	    nexttop(display_screen);
+ 	if (scrolled < new) {
+ 	    display_screen->paused = 0;
++	    if (display_screen->outcount == -1) {
++	         do_hook(H_NOMORE, NULL, "");
++	    }
+ 	    display_screen->outcount = new - scrolled;
+ 	    if (visual) {
+ 		update_status_field(NULL, STAT_MORE);

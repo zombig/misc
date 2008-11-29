@@ -1,0 +1,83 @@
+From syslog-ng 1.9.9:
+
+2006-02-26 08:47:15 GMT	Balazs Scheidler <bazsi@balabit.hu>	patch-16
+
+    Summary:
+      added time_sleep() option to add a fixed latency to the poll loop
+    Revision:
+      syslog-ng--mainline--2.0--patch-16
+
+    	* src/cfg-grammar.y: added KW_TIME_SLEEP processing
+
+    	* src/cfg-lex.l: added keyword for KW_TIME_SLEEP
+
+    	* src/main.c: wait using nanosleep if time_sleep() is set
+
+    	* doc/reference/syslog-ng.xml: added documentation on time_sleep and
+    	a section in the tuning part to explain it a little further
+
+    modified files:
+     ChangeLog doc/reference/syslog-ng.xml src/cfg-grammar.y
+     src/cfg-lex.l src/cfg.h src/main.c
+
+
+--- syslog-ng/src/main.c	2006-03-09 20:25:42.000003000 +0000
++++ syslog-ng/src/main.c	2006-03-09 20:25:59.000002000 +0000
+@@ -253,6 +253,16 @@
+ 				io_callout(&backend->super, 1, &r.super);
+ 			}
+ 		}
++
++		if (backend->configuration->time_sleep > 0)
++		{
++			struct timespec ts;
++
++			ts.tv_sec = 0;
++			ts.tv_nsec = backend->configuration->time_sleep * 1E6;
++
++			nanosleep(&ts, NULL);
++		}
+ 	}
+ 	if (!exit_main_loop) {
+ 		notice("No input/output channels opened, exiting...\n");
+--- syslog-ng/src/cfg-lex.l	2006-03-09 20:26:47.000002000 +0000
++++ syslog-ng/src/cfg-lex.l	2006-03-09 20:26:47.000001000 +0000
+@@ -69,6 +69,7 @@
+   	{ "gc_idle_threshold",	KW_GC_IDLE_THRESHOLD },
+  	{ "time_reopen",	KW_TIME_REOPEN },
+  	{ "time_reap",          KW_TIME_REAP },
++	{ "time_sleep",         KW_TIME_SLEEP },
+ 	{ "log_fifo_size",	KW_LOG_FIFO_SIZE },
+         { "create_dirs",        KW_CREATE_DIRS },
+  	{ "localip",		KW_LOCALIP },
+--- syslog-ng/src/cfg-grammar.y	2006-03-09 20:27:26.000004000 +0000
++++ syslog-ng/src/cfg-grammar.y	2006-03-09 20:27:26.000003000 +0000
+@@ -78,7 +78,7 @@
+ %token KW_FLAGS KW_CATCHALL KW_FALLBACK KW_FINAL
+ %token KW_FSYNC KW_MARK_FREQ KW_SYNC_FREQ KW_STATS_FREQ KW_CHAIN_HOSTNAMES KW_KEEP_HOSTNAME KW_CHECK_HOSTNAME KW_BAD_HOSTNAME
+ %token KW_LOG_FIFO_SIZE KW_LOG_MSG_SIZE
+-%token KW_TIME_REOPEN KW_TIME_REAP KW_USE_TIME_RECVD
++%token KW_TIME_REOPEN KW_TIME_REAP KW_TIME_SLEEP KW_USE_TIME_RECVD
+ %token KW_USE_DNS KW_USE_FQDN KW_GC_BUSY_THRESHOLD 
+ %token KW_GC_IDLE_THRESHOLD KW_CREATE_DIRS KW_SANITIZE_FILENAMES
+ %token KW_DIR_OWNER KW_DIR_GROUP KW_DIR_PERM KW_TEMPLATE KW_TEMPLATE_ESCAPE
+--- syslog-ng/src/cfgfile.h	2006-03-09 20:31:15.000002000 +0000
++++ syslog-ng/src/cfgfile.h	2006-03-09 20:31:15.000001000 +0000
+@@ -50,6 +50,7 @@
+ 	(mark_freq simple UINT32)
+ 	(sync_freq simple UINT32)
+ 	(stats_freq simple UINT32)
++	(time_sleep simple UINT32)
+ 	(time_reopen simple UINT32)
+ 	(time_reap simple UINT32)
+ 	(log_fifo_size simple int)
+--- syslog-ng/src/cfgfile.h.x	2006-03-09 20:31:15.000002000 +0000
++++ syslog-ng/src/cfgfile.h.x	2006-03-09 20:31:15.000001000 +0000
+@@ -12,6 +12,7 @@
+   UINT32 mark_freq;
+   UINT32 sync_freq;
+   UINT32 stats_freq;
++  UINT32 time_sleep;
+   UINT32 time_reopen;
+   UINT32 time_reap;
+   int log_fifo_size;
