@@ -1,0 +1,108 @@
+TinyFugue performs bytewise character parsing. Unfortunately, this interacts
+poorly with multibyte character encodings, such as UTF-8.
+
+The case we've noticed most often is the closing curly quote (0xe2809d).
+TinyFugue drops the high-order bit from the last byte, resulting in 0x1d
+(ctrl-]), which triggers the stock keybinding for /bg.
+
+This patch will:
+
+- Identify and leave UTF-8 characters unmolested (no high-order bit
+  stripping, meta_esc processing).
+- Skip over UTF-8 characters when locating macro keystrokes.
+- Send UTF-8 characters to the remote world, which probably can't make
+  much more sense of them, but allows a fighting chance.
+
+Author: John Morrissey <jwm@horde.net>
+Distributed under the same terms as TinyFugue 5.0beta8.
+
+--- t2/tf-50b8/src/keyboard.c	2007-01-13 18:12:39.000000000 -0500
++++ tf-50b8/src/keyboard.c	2009-01-10 11:31:12.000000000 -0500
+@@ -100,12 +100,30 @@
+     keynode = NULL;  /* in case it pointed to a node that no longer exists */
+ }
+ 
++int utf8_char_width(const unsigned char chr)
++{
++    if ((chr & 0xE0) == 0xC0) {
++        /* 192 - 223, two bytes wide. */
++        return 2;
++    }
++    if ((chr & 0xF0) == 0xE0) {
++        /* 224 - 239, three bytes wide. */
++        return 3;
++    }
++    if ((chr & 0xF8) == 0xF0) {
++        /* 240 - 244, four bytes wide. */
++        return 4;
++    }
++
++    return 0;
++}
++
+ /* returns 0 at EOF, 1 otherwise */
+ int handle_keyboard_input(int read_flag)
+ {
+     char buf[64];
+     const char *s;
+-    int i, count = 0;
++    int i, j, count = 0, utf8_width, pending_utf8_width = 0;
+     static int key_start = 0;
+     static int input_start = 0;
+     static int place = 0;
+@@ -139,7 +157,35 @@
+     if (count == 0 && place == 0)
+ 	goto end;
+ 
+-    for (i = 0; i < count; i++) {
++    while (pending_utf8_width > 0 && pending_utf8_width <= count) {
++        Stringadd(current_input, mapchar(*buf));
++        --pending_utf8_width;
++    }
++
++    for (i = pending_utf8_width; i < count; i++) {
++        utf8_width = utf8_char_width(buf[i]);
++        if (utf8_width > 0) {
++            /* Save this character, skipping the meta_esc/high order bit
++             * stripping below. The remote world probably doesn't have a
++             * good way to deal with UTF-8 either, but not messing with
++             * UTF-8 characters at least gives them a fighting chance.
++             */
++            if (i + utf8_width > count) {
++                pending_utf8_width = utf8_width - (count - 1 - i);
++                for (; i < count; ++i) {
++                    Stringadd(current_input, mapchar(buf[i]));
++                }
++                continue;
++            }
++            for (j = 0; j < utf8_width; ++j) {
++                /* mapchar() is a macro, so we can't buf[i++]. */
++                Stringadd(current_input, mapchar(buf[i]));
++                ++i;
++            }
++            --i;
++            continue;
++        }
++
+         if (istrip) buf[i] &= 0x7F;
+         if (buf[i] & 0x80) {
+ 	    if (!literal_next &&
+@@ -158,6 +204,18 @@
+     if (!s) /* no good chars; current_input not yet allocated */
+ 	goto end;
+     while (place < current_input->len) {
++        utf8_width = utf8_char_width(s[place]);
++        if (utf8_width > 0) {
++            /* We might advance place beyond the end of current_input
++             * if there's a trailing partial UTF-8 character, but this
++             * should be OK since this loop won't progress until
++             * current_input is long enough.
++             */
++            place += utf8_width;
++            key_start += utf8_width;
++            continue;
++        }
++
+         if (!keynode) keynode = keytrie;
+         if ((pending_input = pending_line))
+             break;
