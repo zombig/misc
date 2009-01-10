@@ -13,6 +13,8 @@ This patch will:
 - Send UTF-8 characters to the remote world, which probably can't make
   much more sense of them, but allows a fighting chance.
 
+https://sourceforge.net/tracker/index.php?func=detail&aid=2497988&group_id=186112&atid=915975
+
 Author: John Morrissey <jwm@horde.net>
 Distributed under the same terms as TinyFugue 5.0beta8.
 
