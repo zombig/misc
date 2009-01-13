@@ -1,8 +1,8 @@
 #!/usr/bin/python -tt
 
-# TinyFugue notifier v1.4.1
+# TinyFugue notifier v1.4.2
 # Copyright (c) 2008, Matthew J. Ernisse <mernisse@ub3rgeek.net>
-# Copyright (c) 2008, John Morrissey <jwm@horde.net>
+# Copyright (c) 2008-9, John Morrissey <jwm@horde.net>
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,6 +29,9 @@
 
 
 # Change history:
+# v1.4.2 (12 Jan 2009):
+# - Add support for notification configuration in ~/.tf-notifierrc.
+#
 # v1.4.1:
 # - Handle log file rotation gracefully.
 # - Catch getopt exceptions while parsing .tfrc /def entries.
@@ -46,6 +49,10 @@
 # - Initial public release.
 
 # Notification channel configuration:
+#
+# If the NOTIFICATION array below is empty, ~/.tf-notifierrc will be
+# examined for a NOTIFICATION array.
+#
 # - notify_after: optional number of seconds to wait after a message is
 #     received before sending a notification via this channel. Useful for
 #     batching notifications together (sending more matched lines in each
@@ -256,6 +263,16 @@ try:
 except OSError, e:
 	print '%s: %s' % (LOG_NAME, str(e))
 	sys.exit(1)
+
+if os.path.exists(os.path.expanduser('~/.tf-notifierrc')):
+	try:
+		fp = open(os.path.expanduser('~/.tf-notifierrc'))
+		exec(''.join(fp.readlines()))
+		fp.close()
+	except Exception, e:
+		print >>sys.stderr, 'Unable to load configuration file %s: %s' % \
+			(os.path.expanduser('~/.tf-notifierrc'), str(e))
+		sys.exit(1)
 
 queued = []
 for n in NOTIFICATION:
