@@ -1,0 +1,111 @@
+#!/usr/bin/python
+
+# pgp -> numbers station generator
+# Copyright (c) 2009, John Morrissey <jwm@horde.net>
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+#   * Redistributions of source code must retain the above copyright notice,
+#     this list of conditions and the following disclaimer.
+#   * Redistributions in binary form must reproduce the above copyright
+#     notice, this list of conditions and the following disclaimer in the
+#     documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+# IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Accepts a PGP-encrypted message on stdin and emits a numbers station-like
+# .wav on stdout.
+
+LOCKFILE = 'numbers-lock'
+WAVS = './numbers'
+
+from base64 import b64decode
+from email import message_from_string
+import fcntl
+import os
+import re
+import struct
+import sys
+from tempfile import mkstemp
+import wave
+
+def b26encode(msg):
+	str = []
+	for byte in msg:
+		byte = ord(byte)
+		for i in range(0, 2):
+			str.append("abcdefghijklmnopqrstuvwxyz"[byte % 26])
+			byte /= 26
+	return ''.join(str)
+
+msg = message_from_string(''.join(sys.stdin.readlines()))
+if msg.is_multipart():
+	part = msg.get_payload()[0]
+else:
+	part = msg.get_payload()
+
+swav = wave.open('%s/silence.wav' % WAVS, 'r')
+silence = swav.readframes(swav.getnframes())
+swav.close()
+
+part = part.strip()
+if not part.startswith('-----BEGIN PGP MESSAGE-----'):
+	sys.exit(0)
+
+begin = re.compile(r'^-----BEGIN PGP MESSAGE-----$\s*', re.MULTILINE)
+end = re.compile(r'\s*^-----END PGP MESSAGE-----$\s*', re.MULTILINE)
+part = message_from_string(end.sub('', begin.sub('', part))).get_payload()
+
+fd, outfile = mkstemp(prefix=os.path.basename(sys.argv[0]), suffix='.wav')
+os.close(fd)
+
+out = wave.open(outfile, 'w')
+out.setnchannels(1)
+out.setsampwidth(2)
+out.setframerate(11025)
+
+begin = wave.open('%s/begin.wav' % WAVS, 'r')
+out.writeframes(silence)
+out.writeframes(silence)
+out.writeframes(silence)
+out.writeframes(silence)
+out.writeframes(silence)
+out.writeframes(begin.readframes(begin.getnframes()))
+begin.rewind()
+out.writeframes(silence)
+out.writeframes(begin.readframes(begin.getnframes()))
+out.writeframes(silence)
+out.writeframes(silence)
+out.writeframes(silence)
+
+for char in b26encode(b64decode(part)):
+	char = wave.open('%s/%s.wav' % (WAVS, char), 'r')
+	out.writeframes(char.readframes(char.getnframes()))
+	char.close()
+	out.writeframes(silence)
+
+end = wave.open('%s/end.wav' % WAVS, 'r')
+out.writeframes(end.readframes(end.getnframes()))
+
+out.close()
+
+lockfd = os.open(LOCKFILE, os.O_RDWR + os.O_CREAT, 0600)
+lockdata = struct.pack('hhllhh', fcntl.F_WRLCK, 0, 0, 0, 0, 0)
+rv = fcntl.fcntl(lockfd, fcntl.F_SETLKW, lockdata)
+
+fp = open(outfile, 'r')
+sys.stdout.write(''.join(fp.readlines()))
+fp.close()
