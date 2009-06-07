@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# TinyFugue notifier v1.4.2
+# TinyFugue notifier v1.4.3
 # Copyright (c) 2008, Matthew J. Ernisse <mernisse@ub3rgeek.net>
 # Copyright (c) 2008-9, John Morrissey <jwm@horde.net>
 # All rights reserved.
@@ -29,6 +29,9 @@
 
 
 # Change history:
+# v1.4.3 (6 Jun 2009):
+# - Add 'when' detached support.
+#
 # v1.4.2 (12 Jan 2009):
 # - Add support for notification configuration in ~/.tf-notifierrc.
 #
@@ -58,16 +61,21 @@
 #     batching notifications together (sending more matched lines in each
 #     notification that is triggered). Defaults to 0 (notify immediately).
 # - when: optional array limiting when notifications should be sent.
+#     conditions are ANDed together.
 #   - backlogged: only send notifications when backlogged (i.e., the
 #       world is paused and "More" is displayed in the status bar).
-#
-#       As of TinyFugue 5.0beta8 (the latest available as of this writing),
-#       a patch (http://horde.net/~jwm/software/misc/tf-nomore.patch) is
-#       needed to add the NOMORE hook to TinyFugue. Once TinyFugue is
-#       patched, add these hooks to your ~/.tfrc:
+#       Requires these hooks in .tfrc:
 #
 #         /hook MORE = /sys chmod -t ~/.tf.log
 #         /hook NOMORE = /sys chmod +t ~/.tf.log
+#
+#       TinyFugue as of 5.0beta8 (the latest available as of this writing),
+#       needs patching (http://horde.net/~jwm/software/misc/tf-nomore.patch)
+#       to add the NOMORE hook.
+#   - detached: only send notifications when the screen(1) containing
+#       TinyFugue is detached. If TinyFugue is not being run in a screen,
+#       or the screen's status can't be determined, notification is
+#       performed anyway. Required lsof(1).
 # - method: required method for sending notifications. A notification
 #     method can have multiple channels defined. See below for list of
 #     supported methods and information on their configuration.
@@ -142,6 +150,7 @@ from os.path import basename
 import re
 from smtplib import SMTP
 from stat import *
+import subprocess
 import sys
 from syslog import *
 from time import sleep, time
@@ -338,6 +347,123 @@ for n in NOTIFICATION:
 
 openlog(basename(sys.argv[0]), LOG_PID)
 
+"""Obtain process information from lsof(1)."""
+def run_lsof(args):
+	try:
+		lsof = subprocess.Popen(args, stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE)
+		stdout = lsof.communicate()[0]
+
+		if lsof.returncode < 0:
+			syslog(LOG_ERR,
+				'lsof(1) exited with signal %d.' % -lsof.returncode)
+			return None
+		elif lsof.returncode != 0:
+			syslog(LOG_ERR,
+				'lsof(1) exited with status %d.' % lsof.returncode)
+			return None
+	except OSError, e:
+		syslog(LOG_ERR, 'lsof(1) failed: %s.' % str(e))
+		return None
+
+	info = []
+	headers = []
+	for line in stdout.split('\n'):
+		if not line:
+			continue
+
+		fields = re.split(r'\s+', line)
+
+		if fields[0] == 'COMMAND':
+			headers = fields
+			continue
+
+		if not headers:
+			continue
+
+		line = {}
+		for i in range(min(len(headers), len(fields))):
+			line[headers[i]] = fields[i]
+			info.append(line)
+
+	return info
+
+"""Determine whether the screen:
+     - with the given process ID
+     - containing process(es) holding the given file open
+   is attached.
+"""
+def is_screen_attached(file=None, pid=None):
+	if file and pid:
+		raise Exception('is_screen_attached(): file and pid arguments may not be used at the same time.')
+
+	if file:
+		info = run_lsof(['lsof', '-nR', file])
+	elif pid:
+		info = run_lsof(['lsof', '-nRp', str(pid)])
+	else:
+		return None
+
+	procs = {}
+	for proc in info:
+		if 'PID' not in proc or 'PPID' not in proc:
+			continue
+
+		# Filter out anything that doesn't look like a PID.
+		if not re.search(r'^\d+$', proc['PID']) or \
+		   not re.search(r'^\d+$', proc['PPID']):
+			continue
+
+		procs[int(proc['PID'])] = int(proc['PPID'])
+
+	our_pid = os.getpid()
+	for pid, ppid in procs.iteritems():
+		# We'll have the log open; ignore ourselves.
+		if pid == our_pid:
+			continue
+
+		try:
+			screen = subprocess.Popen(
+				['screen', '-list', '%s.' % ppid],
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE)
+			stdout = screen.communicate()[0]
+
+			if screen.returncode < 0:
+				syslog(LOG_ERR,
+					'Unable to determine whether screen at pid %d is attached; screen(1) exited with signal %d.' % (
+					pid, -screen.returncode))
+				return None
+			elif screen.returncode == 1:
+				# -list/-ls always exit with status 1, regardless of
+				# whether the given argument matched a socket.
+				# https://savannah.gnu.org/bugs/?26750
+				pass
+			elif screen.returncode > 1:
+				syslog(LOG_ERR,
+					'Unable to determine whether screen at pid %d is attached; screen(1) exited with status %d.' % (
+					pid, screen.returncode))
+				return None
+		except OSError, e:
+			syslog(LOG_ERR,
+				'Unable to determine whether screen at pid %d is attached: %s' % (
+				pid, str(e)))
+			return None
+
+		if '(Detached)' in stdout:
+			return False
+		elif '(Attached)' in stdout:
+			return True
+		else:
+			# No screen found for this PID, try its parent unless we've
+			# bottomed out and hit init(8).
+			if ppid == 0:
+				continue
+			result = is_screen_attached(pid=ppid)
+			if result != None:
+				return result
+	return None
+
 while True:
 	# Read all new log lines.
 	while True:
@@ -374,14 +500,27 @@ while True:
 			file.seek(where)
 			break
 		for pattern in PATTERNS:
-			if pattern.search(line):
-				for n in NOTIFICATION:
-					if 'backlogged' in n.get('when', []) and sticky:
-						continue
-					# FIXME: 'when' screen detached support.
+			if not pattern.search(line):
+				continue
 
+			for n in NOTIFICATION:
+				when = n.get('when', [])
+				if not when:
 					n['lines'].append(line)
-				break
+					continue
+
+				# This is going to get messy if we add more conditions.
+				if 'backlogged' in when and 'detached' in when:
+					if not sticky and \
+					   is_screen_attached(file=LOG_NAME) in [None, False]:
+						n['lines'].append(line)
+				elif 'backlogged' in when:
+					if not sticky:
+						n['lines'].append(line)
+				elif 'detached' in when:
+					if is_screen_attached(file=LOG_NAME) in [None, False]:
+						n['lines'].append(line)
+			break
 
 	for n in NOTIFICATION:
 		if not n['lines']:
