@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# TinyFugue notifier v1.4.3
+# TinyFugue notifier v1.4.4
 # Copyright (c) 2008, Matthew J. Ernisse <mernisse@ub3rgeek.net>
 # Copyright (c) 2008-9, John Morrissey <jwm@horde.net>
 # All rights reserved.
@@ -29,6 +29,13 @@
 
 
 # Change history:
+# v1.4.4 (7 Jul 2009):
+# - Don't send matching lines to multiple notification instances with
+#   identical 'method' settings. This avoids duplicate notifications when
+#   notification instances are identical except for different 'when'
+#   settings, such as when ORing 'when' conditions.
+# - Check for new log lines more frequently (every two seconds, was five).
+#
 # v1.4.3 (6 Jun 2009):
 # - Add 'when' detached support.
 #
@@ -499,14 +506,34 @@ while True:
 		if not line:
 			file.seek(where)
 			break
+
+		seen_instances = []
 		for pattern in PATTERNS:
 			if not pattern.search(line):
 				continue
 
 			for n in NOTIFICATION:
+				# Empirically, casting a dict to a string produces the same
+				# result regardless of the order in which items are added to
+				# the dict, but it seems dangerous to rely on that.
+				#
+				# Instead, generate a sorted list (therefore guaranteed
+				# order) of the non-internal elements of this notification
+				# instance to determine whether we've already sent this line
+				# to another notification instance with identical settings.
+				notify_instance = sorted([
+					'%s: %s' % (k, v)
+					for k, v
+					 in n.iteritems()
+					 if k not in ['notify_after', 'when', 'lines', 'last_sent']
+				])
+				if notify_instance in seen_instances:
+					continue
+
 				when = n.get('when', [])
 				if not when:
 					n['lines'].append(line)
+					seen_instances.append(notify_instance)
 					continue
 
 				# This is going to get messy if we add more conditions.
@@ -514,12 +541,15 @@ while True:
 					if not sticky and \
 					   is_screen_attached(file=LOG_NAME) in [None, False]:
 						n['lines'].append(line)
+						seen_instances.append(notify_instance)
 				elif 'backlogged' in when:
 					if not sticky:
 						n['lines'].append(line)
+						seen_instances.append(notify_instance)
 				elif 'detached' in when:
 					if is_screen_attached(file=LOG_NAME) in [None, False]:
 						n['lines'].append(line)
+						seen_instances.append(notify_instance)
 			break
 
 	for n in NOTIFICATION:
@@ -582,7 +612,7 @@ while True:
 			n['lines'] = []
 
 	try:
-		sleep(5)
+		sleep(2)
 	except KeyboardInterrupt:
 		closelog()
 		sys.exit(0)
