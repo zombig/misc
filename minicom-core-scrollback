@@ -1,0 +1,51 @@
+#!/bin/sh
+
+BINARY=~/minicom
+CORE=~/minicom.core.18829
+
+if [ -e src/main.c ]; then
+	cd src
+elif [ ! -e main.c ]; then
+	echo "$(basename "$0"): must be run in the minicom src directory."
+	exit 1
+fi
+
+get_from_gdb()
+{
+	if [ -z "$1" ] || [ -z "$2" ]; then
+		return 1
+	fi
+
+	gdb -q "$1" "$2" 2>/dev/null | \
+		sed -n \
+		    -e '/^Using /,/^#0 /d' \
+		    -e 's/(gdb) //g' \
+		    -e 's/^\$[0-9]\{1,\} = \([0-9]\{1,\}\)$/\1/p' \
+		    -e "s/^\\\$[0-9]\\{1,\\} = [0-9]\\{1,\\} '\(.\)'$/\1/p"
+}
+
+lines=$(
+	(echo -e 'print us->histlines\nquit'; sleep 0.5) | \
+	get_from_gdb $BINARY $CORE
+)
+cols=$(
+	(echo -e 'print us->xs\nquit'; sleep 0.5) | \
+	get_from_gdb $BINARY $CORE
+)
+
+(
+	echo 'set pagination off'
+
+	i=0
+	bytes=$(($lines * $cols))
+	while [ $i -lt $bytes ]; do
+		echo "p/c (us->histbuf + $i)->value"
+		i=$(($i + 1))
+	done
+
+	echo 'quit'
+	sleep 5
+) | get_from_gdb $BINARY $CORE | \
+	tr -d '\n' | \
+	fold -w $cols | \
+	sed 's/[[:space:]]\{1,\}$//'
