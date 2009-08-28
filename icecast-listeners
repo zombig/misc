@@ -95,7 +95,10 @@ def plural(count):
 
 for stream in STREAMS:
 	try:
-		data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + stream)
+		if sys.version_info[:2] >= (2, 6):
+			data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + stream, timeout=5)
+		else:
+			data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + stream)
 		dom = minidom.parse(data)
 	except Exception, e:
 		print "<h3>Unable to retrieve listener information for %s stream: %s</h3>" % \
