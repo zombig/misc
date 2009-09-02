@@ -27,7 +27,11 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from datetime import datetime
-import md5
+import sys
+if sys.version_info[:2] >= (2, 5):
+	import hashlib
+else:
+	import md5
 
 import feedparser
 import PyRSS2Gen
@@ -368,7 +372,10 @@ items = []
 for feed in FEEDS:
 	d = feedparser.parse(feed)
 	for entry in d['entries']:
-		m = md5.new()
+		if sys.version_info[:2] >= (2, 5):
+			m = hashlib.md5()
+		else:
+			m = md5.new()
 		m.update(entry.summary.encode('utf-8'))
 		hash = str(m.hexdigest())
 
