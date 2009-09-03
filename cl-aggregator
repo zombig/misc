@@ -28,10 +28,12 @@
 
 from datetime import datetime
 import sys
-if sys.version_info[:2] >= (2, 5):
+try:
 	import hashlib
-else:
+	md5_constructor = hashlib.md5
+except ImportError:
 	import md5
+	md5_constructor = md5.new
 
 import feedparser
 import PyRSS2Gen
@@ -372,10 +374,7 @@ items = []
 for feed in FEEDS:
 	d = feedparser.parse(feed)
 	for entry in d['entries']:
-		if sys.version_info[:2] >= (2, 5):
-			m = hashlib.md5()
-		else:
-			m = md5.new()
+		m = md5_constructor()
 		m.update(entry.summary.encode('utf-8'))
 		hash = str(m.hexdigest())
 
