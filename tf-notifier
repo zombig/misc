@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# TinyFugue notifier v1.4.4
+# TinyFugue notifier v1.5
 # Copyright (c) 2008, Matthew J. Ernisse <mernisse@ub3rgeek.net>
 # Copyright (c) 2008-9, John Morrissey <jwm@horde.net>
 # All rights reserved.
@@ -29,6 +29,18 @@
 
 
 # Change history:
+# v1.5 (19 Sep 2009):
+# - Add prowl (http://prowl.weks.net/) notification support.
+# - Add 'when' before/after support, to only send notifications
+#   during certain time or date intervals.
+# - 'when' items in the notification configuration are now dictionaries
+#   instead of lists, so comparison values can be specified for
+#   conditions. Though deprecated, the list syntax is still accepted,
+#   so all existing configurations should remain compatible.
+# - Make the log polling loop more readable by splitting the
+#   'when' condition matching code and notification sending code
+#   into separate functions.
+#
 # v1.4.4 (7 Jul 2009):
 # - Don't send matching lines to multiple notification instances with
 #   identical 'method' settings. This avoids duplicate notifications when
@@ -69,6 +81,10 @@
 #     notification that is triggered). Defaults to 0 (notify immediately).
 # - when: optional array limiting when notifications should be sent.
 #     conditions are ANDed together.
+#   - after: only send notifications received after this date or time.
+#       values must be a datetime.datetime or datetime.time object.
+#       The datetime module is imported automatically before
+#       ~/.tf-notifierrc is read.
 #   - backlogged: only send notifications when backlogged (i.e., the
 #       world is paused and "More" is displayed in the status bar).
 #       Requires these hooks in .tfrc:
@@ -79,6 +95,10 @@
 #       TinyFugue as of 5.0beta8 (the latest available as of this writing),
 #       needs patching (http://horde.net/~jwm/software/misc/tf-nomore.patch)
 #       to add the NOMORE hook.
+#   - before: only send notifications received before this date or time.
+#       values must be a datetime.datetime or datetime.time object.
+#       The datetime module is imported automatically before
+#       ~/.tf-notifierrc is read.
 #   - detached: only send notifications when the screen(1) containing
 #       TinyFugue is detached. If TinyFugue is not being run in a screen,
 #       or the screen's status can't be determined, notification is
@@ -89,7 +109,7 @@
 # 
 # Methods:
 # - growl
-#   Sends notifications to a remove Mac OS X Growl (http://growl.info/)
+#   Sends notifications to a remote Mac OS X Growl (http://growl.info/)
 #   server.
 #   - appname: optional application name. Defaults to the basename of this
 #       script (usually 'tf-notifier').
@@ -102,6 +122,13 @@
 #   - title: required notification title.
 #   - urgency: optional notification urgency. Possible values are 'low',
 #       'normal', and 'urgent'. Defaults to 'low'.
+#
+# - prowl
+#   Sends notifications to Prowl (http://prowl.weks.net/).
+#   - apikey: required Prowl API key.
+#   - appname: optional application name. Defaults to the basename of this
+#       script (usually 'tf-notifier').
+#   - title: required notification title.
 #
 # - smtp
 #   Sends notification e-mail messages via SMTP.
@@ -120,7 +147,9 @@
 #   in 60 second intervals to conserve SMSes.
 #	{
 #		'notify_after': 60,
-#		'when': ['backlogged'],
+#		'when': {
+#			'backlogged': True,
+#		},
 #		'method': 'smtp',
 #		'from': 'user@example.com',
 #		'to': '0000000000@mms.att.com',
@@ -136,6 +165,14 @@
 #		'password': 'foobar',
 #	},
 #
+#   Send notifications to a remote Mac using Prowl.
+#	{
+#		'method': 'growl',
+#		'appname': 'tf-notifier',
+#		'title': 'TinyFugue',
+#		'apikey': '1234567890123456789012345678901234567890',
+#	},
+#
 #   Send notifications to Gnome via libnotify.
 #	{
 #		'method': 'libnotify',
@@ -147,9 +184,24 @@
 #	{
 #		'method': 'stdout',
 #	},
+#
+#   Institute quiet hours: only send notifications between the hours
+#   of 09:00 and 22:00.
+#	{
+#		'when': {
+#			'after': datetime.time(hour=9, minute=0, second=0),
+#			'before': datetime.time(hour=22, minute=0, second=0),
+#		},
+#		'method': 'smtp',
+#		'from': 'user@example.com',
+#		'to': '0000000000@mms.att.com',
+#		'subject': 'TinyFugue notification',
+#	},
+#
 NOTIFICATION = [
 ]
 
+import datetime
 from email.Message import Message
 from getopt import getopt, GetoptError
 import os
@@ -294,6 +346,25 @@ queued = []
 for n in NOTIFICATION:
 	n['lines'] = []
 	n['last_sent'] = time()
+
+	when = n.get('when', {})
+	for condition in when:
+		try:
+			cond_value = when[condition]
+		except TypeError:
+			if condition in ['after', 'before']:
+				print >>sys.stderr, \
+					'%s: "%s" values must have a value to compare against.' % \
+					(condition, basename(sys.argv[0]))
+				sys.exit(1)
+
+		if condition in ['after', 'before']:
+			if type(cond_value) not in [datetime.datetime, datetime.time]:
+				print >>sys.stderr, \
+					'%s: "%s" values must be datetime.datetime or datetime.time objects.' % \
+					(condition, basename(sys.argv[0]))
+				sys.exit(1)
+
 	if n['method'] == 'smtp':
 		if 'from' not in n:
 			print >>sys.stderr, '%s: "from" is a required configuration item for the smtp method.' % basename(sys.argv[0])
@@ -351,8 +422,75 @@ for n in NOTIFICATION:
 		except Exception, e:
 			print >>sys.stderr, 'Unable to initialize libnotify: %s' % str(e)
 			sys.exit(1)
+	elif n['method'] == 'prowl':
+		if 'apikey' not in n:
+			print >>sys.stderr, '%s: "apikey" is a required configuration item for the prowl method.' % basename(sys.argv[0])
+			sys.exit(1)
+		if 'title' not in n:
+			print >>sys.stderr, '%s: "title" is a required configuration item for the prowl method.' % basename(sys.argv[0])
+			sys.exit(1)
+
+		try:
+			from prowlpy import Prowl
+			n['prowl'] = Prowl(n['apikey'])
+			try:
+				n['prowl'].verify_key()
+			except Exception, e:
+				print >>sys.stderr, 'Unable to verify Prowl API key: %s' % str(e)
+				sys.exit(1)
+		except Exception, e:
+			print >>sys.stderr, 'Unable to initialize prowl: %s' % str(e)
+			sys.exit(1)
 
 openlog(basename(sys.argv[0]), LOG_PID)
+
+"""Determine whether a notification condition matches."""
+def condition_matches(condition, cond_value):
+	if condition == 'after':
+		if type(cond_value) == type(datetime.time()):
+			now_value = datetime.time()
+		elif type(cond_value) == type(datetime.datetime()):
+			now_value = datetime.datetime.now()
+			now_value.microsecond = 0
+		else:
+			# Should never reach here since this should have
+			# been checked for at startup.
+			syslog(LOG_ERR,
+				'Invalid value for after condition: %s' % cond_value)
+
+		if cond_value > now_value:
+			return True
+		return False
+
+	if condition == 'backlogged':
+		# If the log file is sticky, tf's screen is current (i.e., no More
+		# indicator and therefore not in backscroll).
+		global LOG_NAME
+		sticky = (os.stat(LOG_NAME)[ST_MODE] & S_ISVTX) == S_ISVTX
+
+		return cond_value == (not sticky)
+
+	if condition == 'before':
+		if type(cond_value) == type(datetime.time()):
+			now_value = datetime.time()
+		elif type(cond_value) == type(datetime.datetime()):
+			now_value = datetime.datetime.now()
+			now_value.microsecond = 0
+		else:
+			# Should never reach here since this should have
+			# been checked for at startup.
+			syslog(LOG_ERR,
+				'Invalid value for after condition: %s' % cond_value)
+
+		if cond_value < now_value:
+			return True
+		return False
+
+	if condition == 'detached':
+		is_detached = (not is_screen_attached(file=LOG_NAME))
+		return cond_value == is_detached
+
+	return False
 
 """Obtain process information from lsof(1)."""
 def run_lsof(args):
@@ -471,92 +609,16 @@ def is_screen_attached(file=None, pid=None):
 				return result
 	return None
 
-while True:
-	# Read all new log lines.
-	while True:
-		# If the log's inode has changed, it's probably been rotated.
-		# Start following the new log from the beginning.
-		try:
-			log_stat = os.stat(LOG_NAME)
-			if log_stat[ST_INO] != log_inode:
-				log_inode = log_stat[ST_INO]
-				file = open(LOG_NAME, 'r')
-		except OSError, e:
-			syslog(LOG_ERR,
-				'Error while checking for %s rotation, retrying: %s' %
-				(LOG_NAME, str(e)))
-			try:
-				sleep(5)
-			except KeyboardInterrupt:
-				closelog()
-				sys.exit(0)
-			continue
-
-		# If the log file is sticky, tf's screen is current (i.e., no More
-		# indicator and therefore not in backscroll).
-		#
-		# We want to catch the sticky bit state as soon as possible to
-		# minimize lag between when it's set/cleared and when this loop
-		# rolls over.
-		sticky = (os.stat(LOG_NAME)[ST_MODE] & S_ISVTX) == S_ISVTX
-
-		where = file.tell()
-		line = file.readline().rstrip()
-
-		if not line:
-			file.seek(where)
-			break
-
-		seen_instances = []
-		for pattern in PATTERNS:
-			if not pattern.search(line):
-				continue
-
-			for n in NOTIFICATION:
-				# Empirically, casting a dict to a string produces the same
-				# result regardless of the order in which items are added to
-				# the dict, but it seems dangerous to rely on that.
-				#
-				# Instead, generate a sorted list (therefore guaranteed
-				# order) of the non-internal elements of this notification
-				# instance to determine whether we've already sent this line
-				# to another notification instance with identical settings.
-				notify_instance = sorted([
-					'%s: %s' % (k, v)
-					for k, v
-					 in n.iteritems()
-					 if k not in ['notify_after', 'when', 'lines', 'last_sent']
-				])
-				if notify_instance in seen_instances:
-					continue
-
-				when = n.get('when', [])
-				if not when:
-					n['lines'].append(line)
-					seen_instances.append(notify_instance)
-					continue
-
-				# This is going to get messy if we add more conditions.
-				if 'backlogged' in when and 'detached' in when:
-					if not sticky and \
-					   is_screen_attached(file=LOG_NAME) in [None, False]:
-						n['lines'].append(line)
-						seen_instances.append(notify_instance)
-				elif 'backlogged' in when:
-					if not sticky:
-						n['lines'].append(line)
-						seen_instances.append(notify_instance)
-				elif 'detached' in when:
-					if is_screen_attached(file=LOG_NAME) in [None, False]:
-						n['lines'].append(line)
-						seen_instances.append(notify_instance)
-			break
+"""Send any pending notifications."""
+def perform_notifications():
+	global NOTIFICATION
 
 	for n in NOTIFICATION:
 		if not n['lines']:
 			continue
 		if n['last_sent'] + n.get('notify_after', 0) > time():
 			continue
+		# FIXME: rate limiting support would be nice.
 
 		if n['method'] == 'smtp':
 			try:
@@ -578,7 +640,7 @@ while True:
 					password=n['password'],
 					application=n.get('appname', basename(sys.argv[0])),
 					title=n['title'], description='\n'.join(n['lines']))
-            
+
 				addr = (n['host'], GROWL_UDP_PORT)
 				n['sock'].sendto(p.payload(), addr)
 
@@ -605,16 +667,110 @@ while True:
 				syslog(LOG_ERR,
 					'Unable to send libnotify notification (%d lines): %s' %
 					(len(n['lines']), str(e)))
+		elif n['method'] == 'prowl':
+			try:
+				n['prowl'].add(n['appname'], n['title'],
+					'\n'.join(n['lines']))
+				n['last_sent'] = time()
+				n['lines'] = []
+			except Exception, e:
+				syslog(LOG_ERR,
+					'Unable to send prowl notification (%d lines): %s' %
+					(len(n['lines']), str(e)))
 		elif n['method'] == 'stdout':
 			print '\n'.join(n['lines'])
 
 			n['last_sent'] = time()
 			n['lines'] = []
 
-	try:
-		sleep(2)
-	except KeyboardInterrupt:
-		closelog()
-		sys.exit(0)
+
+while True:
+	# Read all new log lines.
+	while True:
+		# If the log's inode has changed, it's probably been rotated.
+		# Start following the new log from the beginning.
+		try:
+			log_stat = os.stat(LOG_NAME)
+			if log_stat[ST_INO] != log_inode:
+				log_inode = log_stat[ST_INO]
+				file = open(LOG_NAME, 'r')
+		except OSError, e:
+			syslog(LOG_ERR,
+				'Error while checking for %s rotation, retrying: %s' %
+				(LOG_NAME, str(e)))
+			try:
+				sleep(5)
+			except KeyboardInterrupt:
+				closelog()
+				sys.exit(0)
+			continue
+
+		line = file.readline().rstrip()
+		if not line:
+			# We've exhausted all the new log lines. Send
+			# notifications (if any are pending) and wait
+			# a bit before fetching new log lines.
+
+			perform_notifications()
+			try:
+				sleep(2)
+			except KeyboardInterrupt:
+				closelog()
+				sys.exit(0)
+			continue
+
+		seen_instances = []
+		for pattern in PATTERNS:
+			if not pattern.search(line):
+				continue
+
+			for n in NOTIFICATION:
+				# Empirically, casting a dict to a string produces the same
+				# result regardless of the order in which items are added to
+				# the dict, but it seems dangerous to rely on that.
+				#
+				# Instead, generate a sorted list (therefore guaranteed
+				# order) of the non-internal elements of this notification
+				# instance to determine whether we've already sent this line
+				# to another notification instance with identical settings.
+				notify_instance = sorted([
+					'%s: %s' % (k, v)
+					for k, v
+					 in n.iteritems()
+					 if k not in ['notify_after', 'when', 'lines', 'last_sent']
+				])
+				if notify_instance in seen_instances:
+					continue
+
+				when = n.get('when', {})
+				if not when:
+					n['lines'].append(line)
+					seen_instances.append(notify_instance)
+					continue
+
+				num_satisfied = 0
+				for condition in when:
+					try:
+						cond_value = when[condition]
+					except TypeError:
+						cond_value = True
+					except Exception, e:
+						syslog(LOG_ERR,
+							'Unexpected exception when retrieving value for condition %s: %s' %
+							(condition, str(e)))
+						continue
+
+					if condition_matches(condition, cond_value):
+						num_satisfied += 1
+
+				if num_satisfied == len(when):
+					n['lines'].append(line)
+					seen_instances.append(notify_instance)
+
+			# This line has already matched a pattern we're paying
+			# attention to (PATTERNS). Don't proceed to check other
+			# patterns, since we'll send duplicate notifications for
+			# this line.
+			break
 
 closelog()
