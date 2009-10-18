@@ -1,107 +1,138 @@
-#!/opt/csw/bin/python
+#!/usr/bin/python
 
-# google-reader-opml v1.2 - Back up Google Reader OPML
-# Copyright (c) 2006, John Morrissey <jwm@horde.net>
+# google-reader-opml v1.3 - Back up Google Reader OPML
+# Copyright (c) 2006-9, John Morrissey <jwm@horde.net>
 #
-# This program is free software; you can redistribute it and/or modify it
-# under the terms of the GNU General Public License as published by the Free
-# Software Foundation; either version 2 of the License, or (at your option)
-# any later version.
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-# for more details.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License along
-# with this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, 5th Floor, Boston, MA 02110-1301 USA.
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, 5th Floor, Boston, MA 02110-1301
+# USA.
 
-# This script is a bit of a hack; we more or less imitate a web browser and
-# scrape the result. It would be nice if Google Reader OPML could be
+# This script is a bit of a hack; we imitate a web browser and scrape
+# the result. It would be nice if Google Reader OPML could be
 # downloaded through some Google Reader API.
 
-GOOGLE_USERNAME = None
-GOOGLE_PASSWORD = None
+GOOGLE_USERNAME = ''
+GOOGLE_PASSWORD = ''
 OPML_OUTPUT = None
+DEBUG = False
 
 from getopt import gnu_getopt, GetoptError
-from os import stat
-from os.path import basename
-from sys import argv, exit
+import logging
+import os
+from stat import *
+import sys
 from time import gmtime, strftime
-from urllib import urlencode
-import urllib2
-from urllib2 import HTTPError, Request
+from urllib2 import HTTPError
 
-GOOGLE_AUTH_URL = "https://www.google.com/accounts/ServiceLoginAuth"
-GOOGLE_READER_OPML_URL = "https://www.google.com/reader/subscriptions/export"
+import mechanize
 
 def usage():
-	print "google-reader-opml v1.2"
-	print "Usage: " + basename(argv[0]) + " [OPTION] OUTPUT-FILE"
-	print ""
-	print "    -h, --help                    display this help and exit"
-	print "    -u USER, --user=USER          log in as USER"
-	print "    -p PASSWORD, --user=PASSWORD  use password PASSWORD"
-	exit(2)
+	print 'google-reader-opml v1.3'
+	print 'Usage: %s [-h] [-u USER] [-p PASSWORD] OUTPUT-FILE' % os.path.basename(sys.argv[0])
+	print ''
+	print '    -h, --help                    display this help and exit'
+	print '    -u USER, --user=USER          log in as USER'
+	print '    -p PASSWORD, --user=PASSWORD  use password PASSWORD'
 
 try:
-	options = gnu_getopt(argv[1:], "hu:p:", ["help=", "user=", "password="])
+	options = gnu_getopt(sys.argv[1:], 'hu:p:',
+		['help=', 'user=', 'password='])
 except GetoptError, e:
-	print basename(argv[0]) + ": " + str(e)
+	print '%s: %s' % (os.path.basename(sys.argv[0]), str(e))
 	usage()
+	sys.exit(2)
 
 if len(options[1]) != 1:
 	usage()
+	sys.exit(2)
 OPML_OUTPUT = options[1][0]
 
 for option in options[0]:
 	if option[0] == '-h' or option[0] == '--help':
 		usage()
+		sys.exit(0)
 	elif option[0] == '-u' or option[0] == '--user':
 		GOOGLE_USERNAME = option[1]
 	elif option[0] == '-p' or option[0] == '--password':
 		GOOGLE_PASSWORD = option[1]
 
-if GOOGLE_USERNAME == None or GOOGLE_PASSWORD == None or OPML_OUTPUT == None:
+if not GOOGLE_USERNAME or not GOOGLE_PASSWORD or not OPML_OUTPUT:
 	usage()
+	sys.exit(2)
 
-class GetLoginCookies(urllib2.HTTPRedirectHandler):
-	def http_error_302(self, req, fp, code, msg, headers):
-		# We don't need to follow this redirect; we just need its
-		# cookies so we can include them in the request for the OPML.
-		req.cookies = headers["Set-Cookie"]
-		return req
+br = mechanize.Browser()
+br.set_handle_robots(False)
+br.set_handle_refresh(True, 10, True)
+br.set_handle_redirect(True)
+br.addheaders = [
+	('User-agent', 'google-reader-opml 1.3'),
+]
 
-auth = Request(GOOGLE_AUTH_URL,
-	urlencode((("Email", GOOGLE_USERNAME), ("Passwd", GOOGLE_PASSWORD)))
-)
-auth.add_header("User-Agent", "google-reader-opml 1.2")
-opener = urllib2.build_opener(GetLoginCookies)
-opener.open(auth)
+if DEBUG:
+	br.set_debug_http(True)
+	br.set_debug_responses(True)
+	br.set_debug_redirects(True)
+	logger = logging.getLogger('mechanize')
+	logger.addHandler(logging.StreamHandler(sys.stdout))
+	logger.setLevel(logging.DEBUG)
 
-opml = Request(GOOGLE_READER_OPML_URL)
-opml.add_header("Cookie", auth.cookies)
-
-lastmod = 0
 try:
-	lastmod = stat(OPML_OUTPUT)[-3]
+	br.open('https://www.google.com/accounts/ServiceLogin')
+except HTTPError, e:
+	sys.exit('%d %s' % (e.code, e.msg))
+if not br.viewing_html():
+	sys.exit('Unable to retrieve HTML for login page, has %s changed?' % host)
+
+def find_login_form(form):
+	try:
+		form.find_control('Email')
+		form.find_control('Passwd')
+	except:
+		return False
+	return True
+try:
+	br.select_form(predicate=find_login_form)
+except mechanize.FormNotFoundError:
+	sys.exit('Unable to locate login form, has google.com changed?')
+
+br['Email'] = GOOGLE_USERNAME
+br['Passwd'] = GOOGLE_PASSWORD
+
+try:
+	r = br.submit()
+except HTTPError, e:
+	sys.exit('%d %s' % (e.code, e.msg))
+
+try:
+	# Google Reader doesn't seem to support If-Modified-Since yet,
+	# but we'll use it to be nice.
+	lastmod = os.stat(OPML_OUTPUT)[ST_MTIME]
+	br.addheaders = [
+		('If-Modified-Since',
+			strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(lastmod)))
+	]
 except OSError, e:
 	pass
-# Google Reader doesn't seem to support If-Modified-Since yet, but we'll use
-# it to be nice.
-opml.add_header("If-Modified-Since", strftime("%a, %d %b %Y %H:%M:%S GMT", gmtime(lastmod)))
 
 try:
-	data = opener.open(opml)
+	r = br.open('http://www.google.com/reader/subscriptions/export')
 except HTTPError, e:
 	if e.code == 304:
-		exit()
+		sys.exit()
 	else:
-		print "Couldn't fetch Google Reader OPML for " + GOOGLE_USERNAME + ": " + str(e)
-		exit()
+		sys.exit('Unable to fetch Google Reader OPML for %s: %s' % (GOOGLE_USERNAME, str(e)))
 
-out = open(OPML_OUTPUT, "w")
-out.writelines(data)
+out = open(OPML_OUTPUT, 'w')
+out.writelines(r.get_data())
 out.close()
