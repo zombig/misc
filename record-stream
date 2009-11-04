@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# record-stream v1.2
+# record-stream v1.2.1
 #
 # Make program recordings from an online (usually MP3-type) stream.
 #
@@ -32,7 +32,7 @@
 #   into place as $ROOT/$FILE.
 #
 #
-# Copyright (c) 2005-7, John Morrissey
+# Copyright (c) 2005-9, John Morrissey
 # 
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -68,7 +68,7 @@ stop_wget() {
 	disown %?wget
 	for wget_pid in $(pgrep -f "wget --output-document=/tmp/record-aircheck\.[[:alnum:]]{6} --quiet $URL"); do
 		# Make sure it's our child.
-		if [ "$(ps -o ppid= $wget_pid)" == $$ ]; then
+		if [ "$(ps -o ppid= $wget_pid)" -eq $$ ]; then
 			kill $wget_pid
 			break
 		fi
@@ -98,7 +98,7 @@ for wget_pid in $(pgrep -f "wget --output-document=/tmp/record-aircheck\.[[:alnu
 	# defunct), and I can't figure out why. Kludge around this by
 	# checking to see if wget has been given init(8) as a parent,
 	# and kill wget itself if so.
-	if [ $wget_ppid == 1 ]; then
+	if [ $wget_ppid -eq 1 ]; then
 		kill $wget_pid
 	else
 		kill -USR1 $wget_ppid
