@@ -222,7 +222,7 @@ class RitScraper(object):
 			locations.append(locinfo)
 		return locations
 
-	def get_info(type, title, author):
+	def get_info(self, type, title, author):
 		auth = Request(
 			'http://albert.rit.edu/search/X?t:(%s)+and+a:(%s)&searchscope=3&SORT=A' % \
 			(quote_plus(title), quote_plus(author)))
