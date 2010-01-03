@@ -49,15 +49,17 @@ from urllib2 import Request
 from urlparse import urljoin, urlparse
 from xml.etree.ElementTree import ElementTree
 
+import html5lib
 import mechanize
-from BeautifulSoup import BeautifulSoup, Comment as BeautifulSoupComment
+from BeautifulSoup import Comment as BeautifulSoupComment
 
 class MclsScraper(object):
 	endpoint = 'http://www.rochester.lib.ny.us:2080/cgi-bin/cw_cgi'
 	session = None
 
 	def _parse_result(self, body):
-		soup = BeautifulSoup(body)
+		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+		soup = parser.parse(body)
 
 		if soup.find(text=re.compile(r'No status information was found for this title\.')):
 			return []
@@ -120,7 +122,8 @@ class MclsScraper(object):
 			auth.add_header('User-Agent', 'amazon-wishlist 0.2')
 			data = mechanize.urlopen(auth)
 
-			soup = BeautifulSoup(''.join(data.fp.readlines()))
+			parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+			soup = parser.parse(''.join(data.fp.readlines()))
 			self.session = re.sub(r'\D*(\d+)\D.*', '\\1',
 				soup.find('form')['action'])
 
@@ -157,7 +160,8 @@ class MclsScraper(object):
 		data = mechanize.urlopen(auth)
 
 		body = ''.join(data.fp.readlines())
-		soup = BeautifulSoup(body)
+		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+		soup = parser.parse(body)
 		result_uris = []
 		for rec in soup.findAll(href=re.compile('fullRecord')):
 			if rec['href'] not in result_uris:
@@ -173,8 +177,9 @@ class MclsScraper(object):
 		return locations
 
 class RitScraper(object):
-	def _parse_result(body):
-		soup = BeautifulSoup(body, convertEntities=BeautifulSoup.HTML_ENTITIES)
+	def _parse_result(self, body):
+		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+		soup = parser.parse(body)
 
 		if soup.find(text=re.compile('NO ENTRIES FOUND')):
 			return []
@@ -230,7 +235,8 @@ class RitScraper(object):
 		data = mechanize.urlopen(auth)
 
 		body = ''.join(data.fp.readlines())
-		soup = BeautifulSoup(body)
+		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+		soup = parser.parse(body)
 
 		result_uris = []
 		for rec in soup.findAll(attrs={'class': 'briefCitRow'}):
@@ -238,13 +244,13 @@ class RitScraper(object):
 			if link['href'] not in result_uris:
 				result_uris.append(link['href'])
 		if len(result_uris) == 0:
-			return _parse_result(body)
+			return self._parse_result(body)
 
 		locations = []
 		for uri in result_uris:
 			item = Request(urljoin(auth.get_full_url(), uri))
 			item.add_header('User-Agent', 'amazon-wishlist 0.2')
-			locations.extend(_parse_result(''.join(mechanize.urlopen(item).fp.readlines())))
+			locations.extend(self._parse_result(''.join(mechanize.urlopen(item).fp.readlines())))
 		return locations
 
 def ele(ns, item, name):
@@ -344,8 +350,9 @@ def loadPage(wishlist_id, num):
 
 		try:
 			mcls_info = mcls.get_info(type, search_title, search_author)
-		except:
-			print 'Unable to retrieve MCLS info for %s' % this_item['title']
+		except Exception, e:
+			print 'Unable to retrieve MCLS info for %s: %s' % (
+				this_item['title'], str(e))
 			mcls_info = []
 
 		branches = {}
@@ -366,8 +373,9 @@ def loadPage(wishlist_id, num):
 
 		try:
 			rit_info = rit.get_info(None, search_title, this_item.get('by', ''))
-		except:
-			print 'Unable to retrieve RIT info for %s' % this_item['title']
+		except Exception, e:
+			print 'Unable to retrieve RIT info for %s: %s' % (
+				this_item['title'], str(e))
 			rit_info = []
 
 		if len(rit_info) > 0:
