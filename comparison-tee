@@ -41,21 +41,6 @@ from __future__ import with_statement
 # - Mresp: Request was sniffed without sniffing a corresponding response.
 # - T: Request to test server timed out.
 
-# Unfortunately, something related to the threading makes it necessary to
-# manually 'kill -9' this script to stop it. From what I can tell, the
-# KeyboardInterrupt isn't being delivered to a place that can handle it
-# (the stack frame in question is executing at the function definition?!):
-# 
-# Traceback (most recent call last):
-#   File "./comparison-tee", line 564, in <module>
-#     p.dispatch(1, handlePacket)
-#   File "./comparison-tee", line 210, in handlePacket
-#     def handlePacket(header, data):
-# KeyboardInterrupt
-#
-# I haven't dived deeply into this, but if anyone who's worked a fair
-# bit with threaded Python has any ideas, I'm all ears.
-
 import fcntl
 from getopt import gnu_getopt, GetoptError
 import os
@@ -413,9 +398,6 @@ class RadiusComparer(Thread):
 			if not data:
 				return
 
-			if type(data) == type(str()) and data == 'STOP':
-				return
-
 			frame = EthDecoder().decode(data)
 			ip = frame.child()
 			udp = ip.child()
@@ -509,21 +491,13 @@ class RequestsPruner(Thread):
 
 					del REQUESTS[key]
 
-def handle_signal(sig, frame):
-	cleanup()
-
-def cleanup():
-	global THREADS
-	for i in range(0, THREADS):
-		QUEUE.put('STOP')
-
 def usage():
 	print 'Usage: %s INTERFACE' % os.path.basename(sys.argv[0])
 	print ''
 	print '    -h, --help  display this help and exit'
 
 if __name__ == '__main__':
-	global PID_FILE
+	global PID_FILE, THREADS
 
 	progname = os.path.basename(sys.argv[0])
 
@@ -579,14 +553,13 @@ if __name__ == '__main__':
 	else:
 		raise Exception('Only the Linux operating system is currently supported.')
 
-	try:
-		p = pcapy.open_live(iface, 1600, 0, 100)
-		p.setfilter('''
-			(dst host %s and udp and dst port 1812) or
-			(src host %s and udp and src port 1812)''' % \
-			(local_ipaddr, local_ipaddr))
-		while True:
+	p = pcapy.open_live(iface, 1600, 0, 100)
+	p.setfilter('''
+		(dst host %s and udp and dst port 1812) or
+		(src host %s and udp and src port 1812)''' % \
+		(local_ipaddr, local_ipaddr))
+	while True:
+		try:
 			p.dispatch(1, handlePacket)
-	except Exception, e:
-		print >>sys.stderr, 'Exiting on exception: %s' % str(e)
-		cleanup()
+		except KeyboardInterrupt:
+			sys.exit(0)
