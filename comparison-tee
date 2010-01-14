@@ -115,7 +115,7 @@ IGNORE_CLIENTS = [
 #       'test': {
 #           'code': packet.AccessReject,
 #           'attrs': [
-#               'Reply-Message=Account is on HSI Vacation.',
+#               'Reply-Message=Account is disabled.',
 #           ],
 #       }
 #   },
