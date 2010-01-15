@@ -497,7 +497,7 @@ def usage():
 	print '    -h, --help  display this help and exit'
 
 if __name__ == '__main__':
-	global PID_FILE, THREADS
+	global PID_FILE
 
 	progname = os.path.basename(sys.argv[0])
 
@@ -521,8 +521,6 @@ if __name__ == '__main__':
 	if os.geteuid() != 0:
 		print >>sys.stderr, '%s: must be run as root.' % progname
 		sys.exit(1)
-
-	signal.signal(signal.SIGTERM, handle_signal)
 
 	for i in range(0, THREADS):
 		RadiusComparer().start()
