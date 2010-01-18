@@ -32,10 +32,12 @@ ICECAST_ADMIN_USER = "admin"
 ICECAST_ADMIN_PASSWORD = ""
 
 
+import cgi
 import os
 from socket import gethostbyaddr
 import sys
 from time import strftime
+import urllib
 import urllib2
 from xml.dom import minidom
 
@@ -86,7 +88,7 @@ print """
 </head>
 
 <body>
-""" % (os.environ.get("REQUEST_URI", os.path.basename(sys.argv[0])))
+""" % (urllib.quote(os.environ.get("REQUEST_URI", os.path.basename(sys.argv[0]))))
 
 def plural(count):
 	if count == 0 or count > 1:
@@ -96,13 +98,13 @@ def plural(count):
 for stream in STREAMS:
 	try:
 		if sys.version_info[:2] >= (2, 6):
-			data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + stream, timeout=5)
+			data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + urllib.quote(stream), timeout=5)
 		else:
-			data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + stream)
+			data = opener.open(ICECAST_ADMIN_URL + "/listclients?mount=/" + urllib.quote(stream))
 		dom = minidom.parse(data)
 	except Exception, e:
 		print "<h3>Unable to retrieve listener information for %s stream: %s</h3>" % \
-			(stream, str(e))
+			(cgi.escape(stream), cgi.escape(str(e)))
 		continue
 
 	for source in dom.getElementsByTagName("source"):
@@ -130,9 +132,9 @@ for stream in STREAMS:
 					# No reverse DNS; c'est la vie.
 					pass
 				print "<tr class=\"listener\"><td>%s</td><td>%s</td><td>%s</td></tr>" % \
-					(host,
+					(cgi.escape(host),
 					 int(listener.getElementsByTagName("Connected")[0].firstChild.data) / 60,
-					 listener.getElementsByTagName("UserAgent")[0].firstChild.data)
+					 cgi.escape(listener.getElementsByTagName("UserAgent")[0].firstChild.data))
 
 			print "</table>"
 
