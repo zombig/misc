@@ -52,7 +52,6 @@ osascript \
 				-e 'make new session' \
 				 \
 				-e 'tell the last session' \
-					-e 'set name to item 1 of argv' \
 					-e 'exec command "/bin/bash"' \
 					-e 'write text "\"${VISUAL:-${EDITOR:-vi}}\" '\''" & escaped_filename & "'\''; exit"' \
 				-e 'end tell' \
