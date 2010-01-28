@@ -49,7 +49,7 @@ osascript \
 			-e 'make new terminal' \
 			 \
 			-e 'tell the last terminal' \
-				-e 'make new session at the end of sessions' \
+				-e 'make new session' \
 				 \
 				-e 'tell the last session' \
 					-e 'set name to item 1 of argv' \
