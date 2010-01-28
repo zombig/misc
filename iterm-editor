@@ -28,34 +28,34 @@
 # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-osascript \
-	-e 'to replaceText(find, replace, subject)' \
-		-e 'set prevTIDs to text item delimiters of AppleScript' \
-		-e 'set text item delimiters of AppleScript to find' \
-		-e 'set subject to text items of subject' \
-		\
-		-e 'set text item delimiters of AppleScript to replace' \
-		-e 'set subject to "" & subject' \
-		-e 'set text item delimiters of AppleScript to prevTIDs' \
-		\
-		-e 'return subject' \
-	-e 'end replaceText' \
-	\
-	-e 'on run argv' \
-		-e "set escaped_filename to replaceText(\"'\", \"'\\\\''\", item 1 of argv)" \
-		\
-		-e 'tell application "iTerm"' \
-			-e 'activate' \
-			-e 'make new terminal' \
-			 \
-			-e 'tell the last terminal' \
-				-e 'make new session' \
-				 \
-				-e 'tell the last session' \
-					-e 'exec command "/bin/bash"' \
-					-e 'write text "\"${VISUAL:-${EDITOR:-vi}}\" '\''" & escaped_filename & "'\''; exit"' \
-				-e 'end tell' \
-			-e 'end tell' \
-		-e 'end tell' \
-	-e 'end run' \
+osascript -e '
+	to replaceText(find, replace, subject)
+		set prevTIDs to text item delimiters of AppleScript
+		set text item delimiters of AppleScript to find
+		set subject to text items of subject
+
+		set text item delimiters of AppleScript to replace
+		set subject to "" & subject
+		set text item delimiters of AppleScript to prevTIDs
+
+		return subject
+	end replaceText
+
+	on run argv
+		'"set escaped_filename to replaceText(\"'\", \"'\\\\''\", item 1 of argv)"'
+
+		tell application "iTerm"
+			activate
+			make new terminal
+
+			tell the last terminal
+				make new session
+
+				tell the last session
+					exec command "/bin/bash"
+					write text "\"${VISUAL:-${EDITOR:-vi}}\" '\''" & escaped_filename & "'\''; exit"
+				end tell
+			end tell
+		end tell
+	end run' \
 	"$1"
