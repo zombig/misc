@@ -29,7 +29,21 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 osascript \
+	-e 'to replaceText(find, replace, subject)' \
+		-e 'set prevTIDs to text item delimiters of AppleScript' \
+		-e 'set text item delimiters of AppleScript to find' \
+		-e 'set subject to text items of subject' \
+		\
+		-e 'set text item delimiters of AppleScript to replace' \
+		-e 'set subject to "" & subject' \
+		-e 'set text item delimiters of AppleScript to prevTIDs' \
+		\
+		-e 'return subject' \
+	-e 'end replaceText' \
+	\
 	-e 'on run argv' \
+		-e "set escaped_filename to replaceText(\"'\", \"'\\\\''\", item 1 of argv)" \
+		\
 		-e 'tell application "iTerm"' \
 			-e 'activate' \
 			-e 'make new terminal' \
@@ -40,9 +54,9 @@ osascript \
 				-e 'tell the last session' \
 					-e 'set name to item 1 of argv' \
 					-e 'exec command "/bin/bash"' \
-					-e 'write text "\"${VISUAL:-${EDITOR:-vi}}\" '\''" & item 1 of argv & "'\''; exit"' \
+					-e 'write text "\"${VISUAL:-${EDITOR:-vi}}\" '\''" & escaped_filename & "'\''; exit"' \
 				-e 'end tell' \
 			-e 'end tell' \
 		-e 'end tell' \
 	-e 'end run' \
-	"$@"
+	"$1"
