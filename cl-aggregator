@@ -375,6 +375,8 @@ for feed in FEEDS:
 	d = feedparser.parse(feed)
 	for entry in d['entries']:
 		m = md5_constructor()
+		if not hasattr(entry, 'summary'):
+			continue
 		m.update(entry.summary.encode('utf-8'))
 		hash = str(m.hexdigest())
 
