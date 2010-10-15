@@ -1,0 +1,325 @@
+#!/usr/bin/python -tt
+
+# iTunes -> mobile phone synchronizer v1.0
+# Copyright (c) 2010, John Morrissey <jwm@horde.net>
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of Version 2 of the GNU General Public License as
+# published by the Free Software Foundation
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+# Syncs items in the specified playlist(s) to a destination directory. The
+# destination doesn't need to be a mobile phone, but that's what I'm using
+# it for. Any destination directory accessible on the local machine will
+# work.
+#
+# I replaced my iPhone with an Android-based phone and wanted to replicate
+# iTunes music synchronization. I didn't like the existing iTunes sync
+# applications for Android, since each has a substantial downside, like
+# requiring that you run a server on the machine running iTunes, only being
+# able to sync via a network connection and not via USB, requiring that you
+# use their music player, etc.
+#
+# This script seems to do a reasonable job of syncing selected iTunes music
+# to the phone, and any Android music player should be able to play it. It
+# won't sync over a network connection, but I imagine one could modify the
+# rsync invocation to sync to the phone via rsync+ssh, or mount the phone's
+# filesystem on the iTunes machine via SSH using the FUSE filesystem.
+#
+# On OS X with the appscript module (http://appscript.sourceforge.net/)
+# installed, partially played (bookmarked) podcasts will be considered
+# 'unplayed.' On Windows or without the appscript module, podcast items
+# are considered played as soon as they're started, even if only a second
+# or two has been played. This is due to a limitation in how iTunes makes
+# the podcast bookmark location available to outside applications.
+
+# Destination directory to sync music to; a mounted directory from your
+# phone, a mounted SD card, etc.
+DEST = '/Path/to/phone/music/directory'
+
+# Podcasts to sync. The 'Podcasts' playlist must be specified on the command
+# line as a playlist to sync.
+PODCASTS = {
+#	# Examples:
+#
+#	# - Sync all unplayed podcast items.
+#	'dirtyRadio.org': {
+#		'status': ['unplayed'],
+#	},
+#	# - Sync the five most recent unplayed podcast items.
+#	'Hospital Records Podcast': {
+#		'num': 5,
+#		'status': ['unplayed'],
+#	},
+#	# - Sync the fifteen most recent podcast items.
+#	'NPR: Planet Money Podcast': {
+#		'num': 15,
+#	},
+#	# - Sync all played podcast items.
+#	'SALT - Seminars About Long Term Thinking': {
+#		'status': ['played'],
+#	},
+}
+
+import getopt
+import os
+import platform
+import plistlib
+import stat
+import subprocess
+import sys
+import urllib2
+
+try:
+	import appscript
+
+	itunes = appscript.app('iTunes')
+
+	podcast_playlist = None
+	for list in itunes.user_playlists():
+		if list.name() == 'Podcasts':
+			podcast_playlist = list
+			break
+except:
+	itunes = None
+	pass
+
+class MusicLibrary(object):
+	LOCAL_FILE_PREFIX = 'file://localhost'
+	_plist = {}
+
+	def __init__(self, xml_path):
+		self._plist = plistlib.readPlist(xml_path)
+
+	def localTrackName(self, file):
+		if not file.startswith(self.LOCAL_FILE_PREFIX):
+			return file
+		return urllib2.unquote(file).replace(self.LOCAL_FILE_PREFIX, '', 1)
+
+	def playlistNamed(self, name):
+		if 'Playlists' not in self._plist:
+			return None
+
+		for playlist in self._plist['Playlists']:
+			if name == playlist['Name']:
+				return playlist
+		return None
+
+	def tracksInPlaylist(self, name):
+		if 'Tracks' not in self._plist:
+			return []
+
+		playlist = self.playlistNamed(name)
+		if playlist == None:
+			return []
+
+		return [
+			self._plist['Tracks'][str(track['Track ID'])]
+			for track
+			 in playlist['Playlist Items']
+			 if 'Track ID' in track and
+			    str(track['Track ID']) in self._plist['Tracks'] 
+		]
+
+def usage():
+	print 'Usage: %s [-v|--verbose] PLAYLIST...' % os.path.basename(sys.argv[0])
+
+try:
+	opts, args = getopt.getopt(sys.argv[1:], 'nv',
+		['--dry-run', '--verbose'])
+except getopt.GetoptError:
+	usage()
+	sys.exit(2)
+
+DRY_RUN = False
+VERBOSE = False
+for opt in opts:
+	if opt[0] == '-n' or opt[0] == '--dry-run':
+		DRY_RUN = True
+	if opt[0] == '-v' or opt[0] == '--verbose':
+		VERBOSE = True
+
+if len(args) == 0:
+	usage()
+	sys.exit(2)
+
+if platform.system() == 'Darwin':
+	itunes_root = os.path.join(os.path.expanduser('~'),
+		'Music', 'iTunes')
+elif platform.system == 'Windows':
+	itunes_root = os.path.join(os.path.expanduser('~'),
+		'My Documents', 'My Music', 'iTunes')
+itunes_music_root = os.path.join(itunes_root, 'iTunes Music')
+
+files = {}
+
+library = MusicLibrary(
+	os.path.join(itunes_root, 'iTunes Music Library.xml'))
+for playlist_name in args:
+	# Podcasts get special treatment, later.
+	if playlist_name == 'Podcasts':
+		continue
+
+	tracks = library.tracksInPlaylist(playlist_name)
+	if len(tracks) == 0:
+		print >>sys.stderr, '%s: playlist %s does not exist.' % (
+			os.path.basename(sys.argv[0]), playlist_name,
+		)
+		sys.exit(1)
+
+	files[playlist_name] = {}
+
+	for track in tracks:
+		if not track:
+			continue
+
+		file = library.localTrackName(track['Location'])
+		if not os.path.exists(file):
+			continue
+
+		files[playlist_name][file] = \
+			file.replace(itunes_music_root + os.path.sep, '', 1)
+
+if 'Podcasts' in args:
+	tracks_by_podcast = {}
+	for track in library.tracksInPlaylist('Podcasts'):
+		if track['Album'] not in PODCASTS:
+			# We're not syncing this podcast.
+			continue
+
+		tracks_by_podcast.setdefault(track['Album'], []).append(track)
+
+	files['Podcasts'] = {}
+	for podcast, tracks in tracks_by_podcast.iteritems():
+		config = PODCASTS[podcast]
+		tracks.sort(reverse=True, key=lambda track: track['Release Date'])
+		matched_num = 0
+
+		for track in tracks:
+			if matched_num >= config.get('num', sys.maxint):
+				break
+
+			file = library.localTrackName(track['Location'])
+			if not os.path.exists(file):
+				continue
+
+			dest_file = file.replace(itunes_music_root + os.path.sep, '', 1)
+
+			# No statuses configured; we want all files up to num,
+			# regardless of their status.
+			if 'status' not in config or len(config['status']) == 0:
+				files['Podcasts'][file] = dest_file
+				matched_num += 1
+				continue
+
+			played = not track.get('Unplayed', False)
+			# iTunes marks tracks as played once they start playing,
+			# and the bookmark isn't available in the XML-format
+			# library. Interrogating iTunes via AppleScript is better
+			# than digging into the mostly undocumented iTunes binary
+			# music library format, but limits this feature to OS X.
+			# iTunes has a DCOM API for Windows, but I'm not going to
+			# be the one to implement support for it here.
+			#
+			# FIXME: can we set the ID3 start-time tag to sync the
+			# bookmark to the phone? It would require modifying the
+			# file itself and rsyncing every time, but seems worth it.
+			if played and itunes and podcast_playlist:
+				itunes_tracks = itunes.search(podcast_playlist,
+					for_='%s %s' % (track['Artist'], track['Name']))
+				if len(itunes_tracks) == 1:
+					if itunes_tracks[0].played_count() == 0 and \
+					   itunes_tracks[0].bookmark() > 0:
+						played = False
+
+			if 'unplayed' in config['status'] and not played:
+				files['Podcasts'][file] = dest_file
+				matched_num += 1
+			elif 'played' in config['status'] and played:
+				files['Podcasts'][file] = dest_file
+				matched_num += 1
+
+for playlist, filemap in sorted(files.items()):
+	if not DRY_RUN:
+		m3u = open(os.path.join(DEST, '%s.m3u' %
+			playlist.replace(os.path.sep, '_')), 'w')
+	for src, dest in sorted(filemap.items()):
+		containing_dir = os.path.join(DEST, os.path.dirname(dest))
+		if not os.path.exists(containing_dir):
+			print 'Creating intermediate directory %s...' % containing_dir
+			os.makedirs(containing_dir)
+
+		if not DRY_RUN:
+			m3u.write('%s\n' % dest)
+		dest_full = os.path.join(DEST, dest)
+
+		# If the source and destination size and mtime match,
+		# we probably don't need to call rsync(1).
+		if os.path.exists(dest_full):
+			st_src = os.stat(src)
+			st_dest = os.stat(dest_full)
+
+			if st_src[stat.ST_SIZE] == st_dest[stat.ST_SIZE] and \
+			   st_src[stat.ST_MTIME] - st_dest[stat.ST_MTIME] <= 1:
+				continue
+
+		if VERBOSE:
+			print 'Syncing %s...' % dest
+		if DRY_RUN:
+			continue
+
+		cmd = ['rsync', '-t', '--inplace', src, dest_full]
+		proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+			stderr=subprocess.STDOUT)
+		output = proc.communicate()[0]
+		if proc.returncode != 0:
+			print >>sys.stderr, 'Failed to rsync:'
+			print >>sys.stderr, '================'
+			print >>sys.stderr, 'Source: %s' % src
+			print >>sys.stderr, 'Destination: %s' % dest
+			print >>sys.stderr, 'Exit status: %d' % proc.returncode
+			if output:
+				print >>sys.stderr, output
+			print >>sys.stderr
+
+	if not DRY_RUN:
+		m3u.close()
+
+wanted_dest_files = []
+for playlist, filemap in sorted(files.items()):
+	wanted_dest_files.extend(filemap.values())
+
+for path, dirs, files in os.walk(DEST):
+	for file in files:
+		if file.endswith('.m3u'):
+			continue
+
+		full_path = os.path.join(path, file)
+		relative = full_path.replace(DEST + os.path.sep, '', 1)
+		if relative not in wanted_dest_files:
+			if VERBOSE:
+				print 'Removing old file: %s' % relative
+			if DRY_RUN:
+				continue
+
+			os.unlink(full_path)
+
+for path, dirs, files in os.walk(DEST):
+	if len(files) > 0 or len(dirs) > 0:
+		continue
+
+	relative = path.replace(DEST + os.path.sep, '', 1)
+	if VERBOSE:
+		print 'Removing empty directory: %s' % relative
+	if DRY_RUN:
+		continue
+
+	os.rmdir(path)
