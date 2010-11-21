@@ -216,7 +216,8 @@ if 'Podcasts' in args:
 			# No statuses configured; we want all files up to num,
 			# regardless of their status.
 			if 'status' not in config or len(config['status']) == 0:
-				files['Podcasts'][file] = dest_file
+				files.setdefault(track['Album'], {})
+				files[track['Album']][file] = dest_file
 				matched_num += 1
 				continue
 
@@ -241,10 +242,12 @@ if 'Podcasts' in args:
 						played = False
 
 			if 'unplayed' in config['status'] and not played:
-				files['Podcasts'][file] = dest_file
+				files.setdefault(track['Album'], {})
+				files[track['Album']][file] = dest_file
 				matched_num += 1
 			elif 'played' in config['status'] and played:
-				files['Podcasts'][file] = dest_file
+				files.setdefault(track['Album'], {})
+				files[track['Album']][file] = dest_file
 				matched_num += 1
 
 for playlist, filemap in sorted(files.items()):
