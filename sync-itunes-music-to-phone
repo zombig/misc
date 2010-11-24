@@ -200,7 +200,8 @@ if 'Podcasts' in args:
 	files['Podcasts'] = {}
 	for podcast, tracks in tracks_by_podcast.iteritems():
 		config = PODCASTS[podcast]
-		tracks.sort(reverse=True, key=lambda track: track['Release Date'])
+		tracks.sort(reverse=True,
+			key=lambda track: track.get('Release Date', track['Date Added']))
 		matched_num = 0
 
 		for track in tracks:
@@ -234,8 +235,12 @@ if 'Podcasts' in args:
 			# bookmark to the phone? It would require modifying the
 			# file itself and rsyncing every time, but seems worth it.
 			if played and itunes and podcast_playlist:
+				if 'Artist' in track:
+					search_for = '%s %s' % (track['Artist'], track['Name'])
+				else:
+					search_for = track['Name']
 				itunes_tracks = itunes.search(podcast_playlist,
-					for_='%s %s' % (track['Artist'], track['Name']))
+					for_=search_for)
 				if len(itunes_tracks) == 1:
 					if itunes_tracks[0].played_count() == 0 and \
 					   itunes_tracks[0].bookmark() > 0:
