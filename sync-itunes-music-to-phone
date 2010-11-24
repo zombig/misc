@@ -151,6 +151,17 @@ if len(args) == 0:
 	usage()
 	sys.exit(2)
 
+# Normalize the path and remove trailing path separators. Otherwise, the
+# removal algorithm could be confused, since the pathnames we generate (for
+# files we want to keep in DEST) may not exactly match the pathnames we get
+# from walking DEST, and all files in DEST would be removed.
+#
+# We could use os.path.relpath() in the removal algorithm and avoid having
+# to do this, but relpath() was only introduced in Python 2.6.
+DEST = os.path.normpath(DEST)
+while DEST.endswith(os.path.sep):
+	DEST = DEST[:-1]
+
 if platform.system() == 'Darwin':
 	itunes_root = os.path.join(os.path.expanduser('~'),
 		'Music', 'iTunes')
