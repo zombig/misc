@@ -18,6 +18,15 @@ servers = (
     autoconnect = "yes";
   },
   {
+    address = "irc.oftc.net";
+    chatnet = "oftc";
+    port = "6667";
+    use_ssl = "no";
+    ssl_verify = "no";
+    own_host = "";
+    autoconnect = "yes";
+  },
+  {
     address = "irc.isis.employer.com";
     chatnet = "isis";
     port = "6669";
@@ -27,14 +36,6 @@ servers = (
     own_host = "";
     autoconnect = "yes";
   },
-  {
-    address = "irc.lopsa.org";
-    chatnet = "lopsa";
-    port = "6667";
-    use_ssl = "no";
-    ssl_verify = "no";
-    own_host = "";
-  }
 );
 
 chatnets = {
@@ -54,12 +55,22 @@ chatnets = {
     max_modes = "4";
     max_whois = "1";
   };
+  oftc = {
+    type = "IRC";
+    host = "irc.oftc.net";
+    nick = "jwm";
+    autosendcmd = "/^msg nickserv identify foobar; wait -oftc 2000";
+    max_kicks = "4";
+    max_msgs = "1";
+    max_modes = "4";
+    max_whois = "1";
+    autoconnect = "yes";
+  };
   isis = { 
     type = "IRC";
     host = "irc.isis.employer.com";
     nick = "jwm";
   };
-  lopsa = { type = "IRC"; };
 };
 
 channels = (
@@ -217,6 +228,7 @@ statusbar = {
         more = { priority = "-1"; alignment = "right"; };
         barend = { priority = "100"; alignment = "right"; };
         chanact = { };
+        join_notice = { };
       };
     };
     root = { disabled = "yes"; visible = "always"; };
@@ -232,7 +244,11 @@ settings = {
     awaylog_file = "~/.irssi/away.log";
     timestamp_format = "%H:%M:%S";
   };
-  "fe-text" = { term_force_colors = "yes"; };
+  "fe-text" = {
+    term_force_colors = "yes";
+    paste_join_multiline = "no";
+    actlist_sort = "refnum";
+  };
   "fe-common/core" = {
     autocreate_own_query = "yes";
     autocreate_query_level = "MSGS DCCMSGS";
@@ -252,7 +268,16 @@ settings = {
     bitlbee_send_typing = "yes";
     screen_away_message = "'not looking at the screen(1) right now...'";
     chanact_abbreviate_names = "4";
+    short_url_provider = "bitly";
+    twirssi_first_run = "no";
+    twitter_usernames = "johnmorr";
+    show_reply_context = "yes";
+    twirssi_retweet_format = "${$c -> $}RT $n: \"$t\"";
+    twirssi_use_reply_aliases = "yes";
+    twirssi_debug = "no";
+    twirssi_location = "/home/jwm/.irssi/scripts/autorun/twirssi.pl";
   };
+  "irc/flood" = { flood_max_msgs = "0"; };
 };
 hilights = (
   { text = "jwm"; color = "%B"; nick = "yes"; word = "yes"; },
@@ -261,16 +286,29 @@ hilights = (
 logs = { };
 ignores = (
   {
-    level = "JOINS PARTS QUITS NICKS";
-    channels = ( "#ubuntu-devel", "#ubuntu-bugs", "#ubuntu", "#proftpd",
-                 "#isis", "#employer" );
+    level = "JOINS PARTS QUITS NICKS MODES";
+    channels = (
+      "#employer",
+      "#proftpd",
+      "#kvm",
+      "#django",
+      "#ubuntu-devel",
+      "#ubuntu-bugs",
+      "#ubuntu",
+      "#debian-boot",
+      "#debconf",
+      "#debconf-nyc",
+      "#debconf-davis",
+      "#debconf-interschool",
+      "#debconf-414"
+    );
   },
+  { mask = "localhost"; level = "MODES"; channels = ( "&bitlbee" ); },
   { level = "JOINS QUITS"; channels = ( "&bitlbee" ); },
-  { mask = "root!*@*"; level = "MODES"; channels = ( "&bitlbee" ); }
 );
 windows = {
-  12 = { name = "hilight"; sticky = "yes"; };
-  11 = {
+  20 = { name = "hilight"; sticky = "yes"; };
+  19 = {
     items = (
       {
         type = "CHANNEL";
@@ -325,3 +363,10 @@ mainwindows = {
   1 = { first_line = "8"; lines = "15"; };
   2 = { first_line = "1"; lines = "7"; };
 };
+keyboard = (
+  {
+    key = "meta-backspace";
+    id = "command";
+    data = "mark hilight ACTIVE";
+  }
+);
