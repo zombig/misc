@@ -312,10 +312,13 @@ for playlist, filemap in sorted(files.items()):
 	if not DRY_RUN:
 		m3u.close()
 
+# Build a list of files we want to keep in the destination.
 wanted_dest_files = []
 for playlist, filemap in sorted(files.items()):
 	wanted_dest_files.extend(filemap.values())
 
+# Walk the destination and remove any files that we don't want to keep
+# (i.e., remove anything in DEST that isn't in wanted_dest_files).
 for path, dirs, files in os.walk(DEST):
 	for file in files:
 		if file.endswith('.m3u'):
@@ -331,6 +334,7 @@ for path, dirs, files in os.walk(DEST):
 
 			os.unlink(full_path)
 
+# Finally, prune any empty directories.
 for path, dirs, files in os.walk(DEST):
 	if len(files) > 0 or len(dirs) > 0:
 		continue
