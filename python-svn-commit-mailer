@@ -1,0 +1,538 @@
+#!/usr/bin/python -tt
+
+# Mostly-done port of Subversion's commit-mailer.pl to Python.
+# Copyright (c) 2010, John Morrissey <jwm@horde.net>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307, USA.
+
+# I wanted to play a bit with pysvn, so I ported most of the easy parts of
+# Subversion's commit-mailer.pl. There are still some things it doesn't do,
+# such as property differences; all of these missing features should be
+# covered by FIXMEs.
+#
+# Dunno how useful this is itself, but someone might stumble on it as a
+# useful example of code that uses pysvn.
+
+SENDMAIL = '/usr/sbin/sendmail'
+
+# Whether to show the entire contents of deleted files in diff output.
+# Set this to False if you want to save space in commit messages by
+# not showing diffs for deleted files.
+SHOW_DELETED_FILE_DIFFS = True
+
+from email.Message import Message
+from getopt import gnu_getopt, GetoptError
+import os.path
+from popen2 import Popen3
+import re
+import sre_constants
+from subprocess import call
+import sys
+import tempfile
+import time
+from time import localtime, strftime
+from urlparse import urlparse, urlunparse
+
+import pysvn
+
+PROGNAME = os.path.basename(sys.argv[0])
+
+def usage():
+	print \
+"""%s [-f|--from fromaddr] [-h|--hostname mail_hostname]
+      [-n|--diff-lines num] [-l|--log file] [-m|--match regex]
+      [-r|--reply-to addr] [-s|--subject-prefix string]
+      repo_path revnum mail_dest""" % PROGNAME
+
+try:
+	options = gnu_getopt(sys.argv[1:], 'f:h:n:l:m:r:s:', [
+		'from=', 'hostname=', 'diff-lines=', 'log=', 'match=',
+		'reply-to=', 'subject-prefix=',
+	])
+except GetoptError, e:
+	print os.path.basename(sys.argv[0]) + ': ' + str(e)
+	usage()
+	sys.exit(1)
+
+FROM = None
+FROM_HOSTNAME = None
+LOG = None
+MATCH = None
+DIFF_LINES = None
+REPLY_TO = None
+SUBJ_PREFIX = None
+
+for option in options[0]:
+	if option[0] == '-f' or option[0] == '--from':
+		if FROM_HOSTNAME:
+			print >>sys.stderr, \
+				"%s: %s can't be used with -h/--hostname." % \
+				(PROGNAME, option[0])
+			usage()
+			sys.exit(1)
+		FROM = option[1]
+	elif option[0] == '-h' or option[0] == '--hostname':
+		if FROM:
+			print >>sys.stderr, \
+				"%s: %s can't be used with -f/--from." % \
+				(PROGNAME, option[0])
+			usage()
+			sys.exit(1)
+		FROM_HOSTNAME = option[1]
+	elif option[0] == '-n' or option[0] == '--diff-lines':
+		DIFF_LINES = int(option[1])
+	elif option[0] == '-l' or option[0] == '--log':
+		LOG = option[1]
+	elif option[0] == '-m' or option[0] == '--match':
+		# We match against relative paths, so be nice and remove any
+		# leading slashes.
+		try:
+			MATCH = re.compile(re.sub(r'^/+', '', option[1]))
+		except sre_constants.error, e:
+			print >>sys.stderr, \
+				'%s: %s: invalid regular expression.' % \
+				(PROGNAME, option[0])
+			usage()
+			sys.exit(1)
+	elif option[0] == '-r' or option[0] == '--reply-to':
+		REPLY_TO = option[1]
+	elif option[0] == '-s' or option[0] == '--subject-prefix':
+		SUBJ_PREFIX = option[1]
+	else:
+		print '%s: unknown option: %s.' % (PROGNAME, option[0])
+		usage()
+		sys.exit(1)
+
+if len(options[1]) != 3:
+	print >>sys.stderr, '%s: not enough arguments.' % PROGNAME
+	usage()
+	sys.exit(1)
+
+REPO_URL, REV, MAIL_DEST = options[1]
+REV = int(REV)
+
+parts = urlparse(REPO_URL)
+if '@' in parts[1]:
+	userpass = parts[1].split('@')[0]
+	if ':' not in userpass:
+		username = userpass
+		password = None
+	else:
+		username, password = userpass.split(':')
+
+	REPO_URL = urlunparse((parts[0], parts[1].split('@')[1],
+		parts[2], parts[3], parts[4], parts[5]))
+
+TEMPDIR = tempfile.mkdtemp(prefix='%s-' % PROGNAME)
+
+SVN = pysvn.Client()
+SVN.exception_style = 1
+SVN.set_default_username(username)
+SVN.set_default_password(password)
+
+try:
+	logs = SVN.log(
+		url_or_path=REPO_URL,
+		peg_revision=pysvn.Revision(pysvn.opt_revision_kind.number, REV),
+		revision_start=pysvn.Revision(pysvn.opt_revision_kind.number, REV),
+		revision_end=pysvn.Revision(pysvn.opt_revision_kind.number, REV),
+		discover_changed_paths=True)
+except pysvn.ClientError, e:
+	if e.args[0] == 'callback_get_login required':
+		print >>sys.stderr, '%s: authentication for user %s failed.' % \
+			(PROGNAME, SVN_USER)
+		sys.exit(1)
+
+	# e.args[1] could contain multiple errors, but checking the first
+	# one seems to be sane for the "no such revision" case.
+	message, code = e.args[1][0]
+	if code == 160006:
+		print >>sys.stderr, '%s: revision %d not found.' % (PROGNAME, REV)
+		sys.exit(1)
+	else:
+		print >>sys.stderr, "%s: couldn't retrieve revision %d: %s" % \
+			(PROGNAME, REV, ' '.join(e.args[0]))
+		sys.exit(1)
+
+if len(logs) != 1:
+	print >>sys.stderr, '%s: request for revision %d returned more than one log entry, exiting.' % \
+		(PROGNAME, REV)
+	sys.exit(1)
+
+log = logs[0]
+
+all_paths = []
+dirs = []
+copied = {}
+added = []
+removed = []
+modified = []
+unknown = []
+for changed in log.changed_paths:
+	path = changed.path
+	if path[0] == '/':
+		path = path[1:]
+
+	rev = REV
+	if changed.action in ['D']:
+		rev = REV - 1
+
+	# FIXME: SVN_DIRENT_TIME instead of .log() in get_diff()?
+	diffs = SVN.list(
+		url_or_path='%s/%s' % (REPO_URL, path),
+		peg_revision=pysvn.Revision(pysvn.opt_revision_kind.number, rev),
+		revision=pysvn.Revision(pysvn.opt_revision_kind.number, rev),
+		dirent_fields=pysvn.SVN_DIRENT_KIND)
+
+	if diffs[0][0].kind == pysvn.node_kind.dir:
+		path += '/'
+		dir = path
+	else:
+		dir = '/'.join(path.split('/')[:-1]) + '/'
+	if dir not in dirs:
+		dirs.append(dir)
+		all_paths.append(dir)
+
+	if changed.copyfrom_path and path not in copied:
+		copyfrom_path = changed.copyfrom_path
+		if copyfrom_path[0] == '/':
+			copyfrom_path = copyfrom_path[1:]
+		copied[path] = {
+			'from_path': copyfrom_path,
+			'from_rev': changed.copyfrom_revision.number,
+		}
+
+	if changed.action == 'A':
+		added.append(path)
+		all_paths.append(path)
+	elif changed.action in ['R', 'D']:
+		removed.append(path)
+		all_paths.append(path)
+		if changed.copyfrom_path:
+			added.append(path)
+	elif changed.action == 'M':
+		modified.append(path)
+		all_paths.append(path)
+	else:
+		unknown.append((changed.action, path))
+
+dirs.sort()
+added.sort()
+removed.sort()
+modified.sort()
+
+# svnlook(1) sorts directories first in its diff output
+# (slashes before dashes).
+def diffsort(a, b):
+	a_list = list(a)
+	for i in range(len(a_list)):
+		if a_list[i] == '/':
+			a_list[i] = '-'
+		elif a_list[i] == '-':
+			a_list[i] = '/'
+
+	b_list = list(b)
+	for i in range(len(b_list)):
+		if b_list[i] == '/':
+			b_list[i] = '-'
+		elif b_list[i] == '-':
+			b_list[i] = '/'
+
+	return cmp(a_list, b_list)
+all_paths.sort(diffsort)
+
+if MATCH:
+	for path in all_paths:
+		if MATCH.match(path):
+			break
+	else:
+		sys.exit(0)
+
+msg = Message()
+msg['To'] = MAIL_DEST
+if FROM:
+	msg['From'] = FROM
+elif FROM_HOSTNAME:
+	msg['From'] = '%s@%s' % (log.author, FROM_HOSTNAME)
+else:
+	msg['From'] = log.author
+
+
+common = dirs[0].split('/')
+for dir in dirs[1:]:
+	cur = dir.split('/')
+	for i in range(len(common)):
+		if i == len(cur) or common[i] != cur[i]:
+			for j in range(i, len(common)):
+				del common[i]
+			break
+common_path = '/'.join(common)
+
+subject_dirs = [common_path]
+for dir in dirs:
+	if dir == common_path:
+		continue
+
+	parts = dir.replace(common_path + '/', '', 1).split('/')[:-1]
+	for i in range(len(parts)):
+		path = '/'.join(parts[:i + 1])
+		if path not in subject_dirs:
+			subject_dirs.append(path)
+subject_dirs.sort()
+
+def scrub_common_path(path):
+	if path == common_path:
+		return '.'
+	return path.replace(common_path + '/', '', 1)
+msg['Subject'] = 'commit: r%d - in %s: %s' % \
+	(log.revision.number, common_path,
+	 ' '.join(sorted(map(scrub_common_path, subject_dirs))))
+
+
+if REPLY_TO:
+	msg['Reply-To'] = REPLY_TO
+
+# From: Greg Stein <gstein@lyra.org>
+# Subject: Re: svn commit: rev 2599 - trunk/tools/cgi
+# To: dev@subversion.tigris.org
+# Date: Fri, 19 Jul 2002 23:42:32 -0700
+# 
+# Well... that isn't strictly true. The contents of the files
+# might not be UTF-8, so the "diff" portion will be hosed.
+# 
+# If you want a truly "proper" commit message, then you'd use
+# multipart MIME messages, with each file going into its own part,
+# and labeled with an appropriate MIME type and charset. Of
+# course, we haven't defined a charset property yet, but no biggy.
+# 
+# Going with multipart will surely throw out the notion of "cut
+# out the patch from the email and apply." But then again: the
+# commit emailer could see that all portions are in the same
+# charset and skip the multipart thang. 
+# 
+# etc etc
+# 
+# Basically: adding/tweaking the content-type is nice, but don't
+# think that is the proper solution.
+msg['Content-Type'] = 'text/plain; charset=UTF-8'
+msg['Content-Transfer-Encoding'] = '8bit'
+
+if time.daylight:
+	offset = time.altzone
+else:
+	offset = time.timezone
+tz_hhmm = '%.2d%.2d' % (offset / 60 / 60, (offset / 60) % 60)
+if offset >= 0:
+	tz_hhmm = '+' + tz_hhmm
+else:
+	tz_hhmm = '-' + tz_hhmm
+
+body = []
+body.append("""Author: %s
+Date: %s
+New Revision: %d
+
+""" % (log.author,
+       strftime('%Y-%m-%d %H:%M:%S %%s (%a, %d %b %Y)', localtime(log.date)) % tz_hhmm,
+       log.revision.number))
+
+if added:
+	body.append('Added:\n   ')
+	body.append('\n   '.join(added))
+	body.append('\n')
+if removed:
+	body.append('Removed:\n   ')
+	body.append('\n   '.join(removed))
+	body.append('\n')
+if modified:
+	body.append('Modified:\n   ')
+	body.append('\n   '.join(modified))
+	body.append('\n')
+if unknown:
+	body.append('Unknown Actions:\n   ')
+	body.append('\n   '.join([
+		'%s %s' % (action, path)
+		for action, path
+		 in unknown
+	]))
+	body.append('\n')
+
+body.append('Log:\n%s\n\n' % log.message)
+
+plus_re = re.compile(r'^\+\+\+ [^\t]+\t\(revision (\d+)\)$', re.MULTILINE)
+minus_re = re.compile(r'^--- [^\t]+\t\(revision (\d+)\)$', re.MULTILINE)
+index_re = re.compile(r'^Index: .*', re.MULTILINE)
+def get_diff(path, rev1, rev2, index_replacement):
+	global dirs
+
+	# Don't emit diffs for directories, since pysvn.Client.diff()
+	# will emit diffs for files in this directory, despite
+	# recurse=False.
+	if path in dirs:
+		return ''
+
+	try:
+		# FIXME: need to manually add '\ No newline at end of file'
+		# FIXME: need to generate property diffs, pysvn.Client.diff()
+		# doesn't generate them for us.
+		# SVN_DIRENT_HAS_PROPS to SVN.list() above?
+		# SVN.prop{get,list}()
+		diff = SVN.diff(
+			tmp_path=os.path.join(TEMPDIR, PROGNAME),
+			url_or_path='%s/%s' % (REPO_URL, path),
+			recurse=False,
+			revision1=pysvn.Revision(pysvn.opt_revision_kind.number, rev1),
+			revision2=pysvn.Revision(pysvn.opt_revision_kind.number, rev2))
+	except pysvn.ClientError, e:
+		message, code = e.args[1][0]
+		if code != 160013:
+			raise
+
+		global copied, removed
+
+		if path in dirs:
+			return ''
+
+		diff = ''
+
+		if path in removed and SHOW_DELETED_FILE_DIFFS:
+			if path in copied:
+				from_path = copied[path]['from_path']
+				from_rev = copied[path]['from_rev']
+			else:
+				from_path = path
+				from_rev = rev1
+
+			diff += 'Deleted: %s\n%s\n' % (path, '=' * 67)
+
+			# FIXME: how to determine a binary file
+			if path.endswith('.gif') or path.endswith('.jpg') or path.endswith('.png'):
+				diff += '(Binary files differ)\n'
+			else:
+				f = SVN.cat(url_or_path='%s/%s' % (REPO_URL, from_path),
+					peg_revision=pysvn.Revision(pysvn.opt_revision_kind.number, from_rev),
+					revision=pysvn.Revision(pysvn.opt_revision_kind.number, from_rev))
+				f = f.split('\n')
+				if f[-1] == '':
+					del f[-1]
+				f_diff = '\n'.join(['-%s' % line for line in f])
+
+				logs = SVN.log(
+					url_or_path=REPO_URL,
+					peg_revision=pysvn.Revision(pysvn.opt_revision_kind.number, rev2),
+					revision_start=pysvn.Revision(pysvn.opt_revision_kind.number, rev1),
+					revision_end=pysvn.Revision(pysvn.opt_revision_kind.number, rev2))
+
+				diff += '--- %s\t%s (rev %d)\n+++ %s\t%s (rev %d)\n@@ -%d,%d +%d,%d @@\n%s\n' % \
+					(from_path, strftime('%Y-%m-%d %H:%M:%S %Z', localtime(logs[0].date)), from_rev,
+					 path, strftime('%Y-%m-%d %H:%M:%S %Z', localtime(logs[1].date)),
+					 rev2,
+					 1, len(f), 0, 0, f_diff)
+		if path in copied:
+			if path in removed:
+				diff += '\n'
+
+			diff += 'Copied: %s (from rev %d, %s)\n%s\n' % \
+				(path, copied[path]['from_rev'], copied[path]['from_path'],
+				'=' * 67)
+
+			# FIXME: how to determine a binary file
+			if path.endswith('.gif') or path.endswith('.jpg') or path.endswith('.png'):
+				diff += '(Binary files differ)\n'
+			else:
+				logs = SVN.log(
+					url_or_path=REPO_URL,
+					peg_revision=pysvn.Revision(pysvn.opt_revision_kind.number, rev2),
+					revision_start=pysvn.Revision(pysvn.opt_revision_kind.number, rev2),
+					revision_end=pysvn.Revision(pysvn.opt_revision_kind.number, rev2))
+
+				f2 = SVN.cat(url_or_path='%s/%s' % (REPO_URL, path),
+					peg_revision=pysvn.Revision(pysvn.opt_revision_kind.number, rev2),
+					revision=pysvn.Revision(pysvn.opt_revision_kind.number, rev2))
+				f2 = f2.split('\n')
+				if f2[-1] == '':
+					del f2[-1]
+				f2_diff = '\n'.join(['+%s' % line for line in f2])
+
+				diff += '--- %s\t%s (rev %d)\n+++ %s\t%s (rev %d)\n@@ -%d,%d +%d,%d @@\n%s\n' % \
+					(path, ' ' * 23, 0,
+					 path, strftime('%Y-%m-%d %H:%M:%S %Z', localtime(logs[0].date)), rev2,
+					 0, 0, 1, len(f2), f2_diff)
+
+		return diff
+
+	logs = SVN.log(
+		url_or_path=REPO_URL,
+		peg_revision=pysvn.Revision(pysvn.opt_revision_kind.number, rev2),
+		revision_start=pysvn.Revision(pysvn.opt_revision_kind.number, rev1),
+		revision_end=pysvn.Revision(pysvn.opt_revision_kind.number, rev2))
+	diff = minus_re.sub(
+		r'--- %s\t%s (rev \1)' %
+			(path, strftime('%Y-%m-%d %H:%M:%S %Z', localtime(logs[0].date))),
+		diff)
+	diff = plus_re.sub(
+		r'+++ %s\t%s (rev \1)' %
+			(path, strftime('%Y-%m-%d %H:%M:%S %Z', localtime(logs[1].date))),
+		diff)
+
+	diff = index_re.sub('%s: %s' % (index_replacement, path), diff, 2)
+	return diff
+
+diffs = []
+for path in all_paths:
+	if path in copied:
+		diffs.append(get_diff(path, REV - 1, REV, None))
+	elif path in removed:
+		diffs.append(get_diff(path, REV - 1, REV, 'Removed'))
+	elif path in modified:
+		diffs.append(get_diff(path, REV - 1, REV, 'Modified'))
+	elif path in added:
+		diffs.append(get_diff(path, REV - 1, REV, 'Added'))
+
+diffs = '\n'.join([diff for diff in diffs if diff != '']) + '\n\n'
+if DIFF_LINES:
+	diffs = diffs.split('\n')
+	if len(diffs) > DIFF_LINES:
+		diffs = diffs[:DIFF_LINES]
+		truncated = 'Diffs truncated at %d lines.' % DIFF_LINES
+		diffs.append('-' * len(truncated))
+		diffs.append(truncated)
+		diffs.append('-' * len(truncated))
+	diffs = '\n'.join(diffs)
+body.append(diffs)
+
+msg.set_payload(''.join(body))
+
+# no e-mail noise while debugging plz
+#p = Popen3((SENDMAIL, '-f', '<>', '-ti'), 'w')
+#p.tochild.write(str(msg))
+#p.tochild.close()
+#status = os.WEXITSTATUS(p.wait())
+#if status:
+#	print >>sys.stderr, \
+#		'%s: error during sendmail execution, return code %d.' % \
+#		(PROGNAME, status)
+#	exit(1)
+
+if LOG:
+	try:
+		fp = open(LOG, 'a')
+		fp.write(str(msg))
+		fp.close()
+	except Exception, e:
+		print >>sys.stderr, "%s: couldn't write message to log file: %s" % \
+			(PROGNAME, str(e))
+
+os.rmdir(TEMPDIR)
