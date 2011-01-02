@@ -1,0 +1,947 @@
+#!/usr/bin/python -tt
+from __future__ import with_statement
+
+# am-i, a script to determine whether Google Calendar events currently apply
+# Copyright (c) 2010, 2011, John Morrissey <jwm@horde.net>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307, USA.
+
+# I got tired of having to enable vacation(1) manually when I go on
+# vacation. I already track when I'm not working using Google Calendar,
+# so I wrote this program to automatically check whether I'm on vacation
+# and invoke a subprogram (in my case, vacation(1)) when I am. Instead of
+# executing a subprogram, it can also use its exitstatus to signal whether
+# a given condition currently applies, based on Google Calendar events.
+#
+# It's generic enough to be useful in a wide variety of cases. If you track
+# events in a Google Calendar and want to determine whether a type of event
+# applies right now, it should be easy to configure this program to work
+# for you.
+#
+# It tries to be intelligent about weekends and workday hours. For example,
+# you can configure it (using the day_start/day_end/weekend items) so that
+# if it's Friday and you're on vacation (the 'vacation' condition applies),
+# it will use a return date of the following Monday.
+
+# Useful invocations
+# ==================
+#
+# - Automatically detect when you're on vacation and invoke the vacation(1)
+#   utility to send an autoreply.
+#
+#       am-i vacation jwm -- vacation -m @MSG_FILE@ jwm
+#
+# - Determine whether you're on call. Use this as a conditional in your
+#   mail filteirng rules to determine, for example, whether to forward
+#   Nagios alerts to you via SMS only when you're on call.
+#
+#       am-i oncall jwm
+
+# Message template variables
+# ==========================
+#
+# This program can expand certain variables in a message template.
+# - $RETURN_ON
+#   The date when the specified condition is no longer met. For example,
+#   when calendar events indicate you're no longer on vacation. The
+#   format of this date may be overridden on the command line.
+# - $RETURN_ON_ROMAN
+#   $RETURN_ON, expressed in Roman numerals. This variable is not subject
+#   to the specified date format.
+
+# Subprogram variables
+# ====================
+#
+# This program can pass variables as arguments to subprograms.
+# - @MSG_FILE@
+#   If this variable is present in the subprogram's arguments, variables in
+#   the specified message template will be expanded. When expansion is
+#   complete, the resulting message is written to a temporary file. This
+#   variable is replaced by the filename of the temporary file.
+# - @RETURN_ON@
+#   The date when the specified condition is no longer met. For example,
+#   when calendar events indicate you're no longer on vacation. The
+#   format of this date may be overridden on the command line.
+
+# Exit status
+# ====================
+# 
+# - If a subprogram *is* specified: exits nonzero if the subprogram
+#   invocation failed or an error was encountered in determining
+#   whether the specified condition applies. Otherwise, exits
+#   successfully (exitstatus 0). This is useful for invoking this
+#   program from a mail filter (such as procmail or maildrop) to
+#   invoke vacation(1) when on vacation.
+# - If a subprogram is *not* specified: exits successfully (exit status 0)
+#   if the specified condition applies. Exits with status 1 if the condition
+#   does not apply. Exits with any other exit status if an error was
+#   encountered. This makes the program useful as a condition in shell
+#   scripts or mail filtering recipes.
+
+import calendar
+import cPickle
+import datetime
+import fcntl
+import re
+import optparse
+import os
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+import atom
+import gdata.calendar
+import gdata.calendar.service
+
+# E-mail address and password for your Google account.
+EMAIL = ''
+PASSWORD = ''
+# Calendar to look for events in.
+CALENDAR_NAME = ''
+
+# Keys are conditions (specified on the command line). Values contain
+# further configuration specific to that condition:
+#
+# - keywords: words that must be present in a calendar event for the
+#   calendar event to be considered for that condition.
+# - day_start, day_end (optional): when the 'work day' starts and ends.
+#
+#   After the workday ends, the following day's events scheduled after
+#   day_start are used to determine whether the specified condition is met.
+#   Before the workday starts, events starting after day_start are used to
+#   determine whether the specified condition is met.
+#
+#   If these items aren't present, this logic is disabled.
+#
+#   This allows the script to (for example) send vacation messages
+#   after the workday ends, so someone e-mailing you at night will
+#   still get a vacation message, even though the calendar event
+#   for your vacation might not "start" until the following day.
+#   This makes it easy to schedule a full day's vacation by creating
+#   an all day event for the day you'll be gone.
+# - weekend_days (optional): days that are part of the weekend. When
+#   calculating a return date, this program skips weekend days if
+#   they're in the middle of a satisfied condition. For example, if
+#   your calendar events have you on vacation for Friday and Monday
+#   and weekend_days set to Saturday and Sunday, your return date
+#   will be correctly calculated as Tuesday.
+#
+#   If these items aren't present, this logic is disabled.
+#
+# The (optional) 'vacation_everyone' trigger is automatically checked
+# when the 'vacation' condition is specified. The difference is that
+# vacation_everyone applies to all users; it doesn't require that
+# the specified username is present in the event title. This is useful
+# for detecting holidays that apply to everyone.
+TRIGGERS = {
+	'oncall': {
+		'keywords': ['oncall'],
+	},
+	'vacation': {
+		'keywords': ['pto', 'vacation'],
+		'day_start': datetime.time(hour=8),
+		'day_end': datetime.time(hour=16),
+		'weekend_days': [calendar.SATURDAY, calendar.SUNDAY],
+	},
+	'vacation_everyone': {
+		'keywords': ['holiday'],
+	},
+}
+
+# Search this far into the future for a return date. If no return date is
+# found in this time period, we use the day after SEARCH_FOR_RETURN as the
+# return date.
+SEARCH_FOR_RETURN = datetime.timedelta(days=21)
+
+# Calendar events are cached in EVENTS_CACHE for EVENTS_CACHE_LIFETIME.
+EVENTS_CACHE = '~/.am-i.eventscache'
+EVENTS_CACHE_LIFETIME = datetime.timedelta(hours=1)
+
+# Enables debugging mode. Enables verbose output and disables
+# subprogram execution.
+DEBUG = False
+
+
+EX_OK = 0
+EX_USAGE = 64
+EX_TEMPFAIL = 75
+
+def calService():
+	try:
+		return calService.cal
+	except:
+		pass
+
+	calService.cal = gdata.calendar.service.CalendarService()
+	calService.cal.email = EMAIL
+	calService.cal.password = PASSWORD
+	calService.cal.source = '%s (%s)' % (
+		os.path.basename(sys.argv[0]), EMAIL,
+	)
+	calService.cal.ProgrammaticLogin()
+
+	feed = calService.cal.GetAllCalendarsFeed()
+	for c in feed.entry:
+		if c.title.text != CALENDAR_NAME:
+			continue
+
+		if DEBUG:
+			print 'Feed timezone: %s' % c.timezone.value
+		os.environ['TZ'] = c.timezone.value
+		time.tzset()
+		break
+	else:
+		raise Exception('Calendar "%s" doesn\'t exist, or your account doesn\'t have access to it.' %
+			CALENDAR_NAME)
+
+	return calService.cal
+
+def timezoneOffsetString():
+	if time.localtime().tm_isdst:
+		tz_offset = -time.altzone / 60
+	else:
+		tz_offset = -time.timezone / 60
+	
+	if tz_offset < 0:
+		sign = '-'
+	else:
+		sign = '+'
+	return '%s%02d:%02d' % (
+		sign, abs(tz_offset) / 60, abs(tz_offset) % 60,
+	)
+
+def get_events(day_start, day_end, weekend_days):
+	cal = calService()
+
+	query = gdata.calendar.service.CalendarEventQuery()
+	query.max_results = 10000
+	query.singleevents = 'true'
+	query.orderby = 'starttime'
+
+	start = datetime.datetime.now()
+	# If it's after ~business hours, consider the next day's events.
+	if start.time() >= day_end:
+		start += datetime.timedelta(days=1)
+		start = start.replace(
+			hour=day_start.hour, minute=day_start.minute,
+			second=day_start.second,
+			microsecond=day_start.microsecond)
+	# Weekends consider the following Monday's events.
+	start = skip_weekend(start, weekend_days)
+
+	offset_str = timezoneOffsetString()
+
+	query.start_min = start.strftime('%Y-%m-%dT%H:%M:%S') + offset_str
+	query.start_max = datetime.datetime.combine(
+		start.date() + SEARCH_FOR_RETURN, datetime.time()).\
+		strftime('%Y-%m-%dT%H:%M:%S') + offset_str
+	if DEBUG:
+		print 'Fetching events from %s to %s.' % (
+			query.start_min, query.start_max,
+		)
+
+	feed = cal.CalendarQuery(query)
+	# 'orderby starttime' yields most recent entries first,
+	# but we want to iterate in chronological order.
+	feed.entry.reverse()
+
+	return feed.entry
+
+def gcal2datetime(when):
+	try:
+		return datetime.datetime.strptime(when[:23], "%Y-%m-%dT%H:%M:%S.000")
+	except:
+		try:
+			return datetime.datetime.strptime(when, "%Y-%m-%d")
+		except:
+			return None
+
+def skip_weekend(when, days):
+	while when.weekday() in days:
+		if DEBUG:
+			print '%s is during the weekend, adding one day.' % when
+		when += datetime.timedelta(days=1)
+	return when
+
+def eligible_event(event, who, trigger_key):
+	for word in event.title.text.split():
+		if trigger_key == 'vacation' and \
+		   word.lower() in TRIGGERS.get('vacation_everyone', []):
+			return True
+		if who in event.title.text and \
+		   word.lower() in TRIGGERS[trigger_key]['keywords']:
+			return True
+
+	return False
+
+def expected_return(now, events, trigger_key, who):
+	if DEBUG:
+		print 'Now: %s' % now
+
+	if type(now) == datetime.date:
+		return_on = datetime.datetime.combine(now, datetime.time())
+	else:
+		return_on = now
+
+	day_start = TRIGGERS[trigger_key].get('day_start',
+		datetime.time(hour=8))
+	day_end = TRIGGERS[trigger_key].get('day_end',
+		datetime.time(hour=16))
+
+	if return_on.hour >= day_end.hour:
+		return_on += datetime.timedelta(days=1)
+		return_on = return_on.replace(
+			hour=day_start.hour, minute=day_start.minute,
+			second=day_start.second,
+			microsecond=day_start.microsecond)
+	if return_on.hour < day_start.hour:
+		return_on = return_on.replace(
+			hour=day_start.hour, minute=day_start.minute,
+			second=day_start.second,
+			microsecond=day_start.microsecond)
+	return_on = skip_weekend(return_on,
+		TRIGGERS[trigger_key].get('weekend_days', []))
+	orig_return_on = return_on
+
+	for event in events:
+		if DEBUG:
+			print 'Event: %s, from %s to %s' % (
+				event.title.text, event.when[0].start_time,
+				event.when[0].end_time,
+			)
+
+		if not eligible_event(event, who, trigger_key):
+			continue
+
+		start = gcal2datetime(event.when[0].start_time)
+		end = gcal2datetime(event.when[0].end_time)
+		if start > return_on or end < return_on:
+			continue
+
+		if DEBUG:
+			print 'Event bumps return_on from %s to %s.' % (
+				return_on, end,
+			)
+		return_on = end
+		# Don't stop the loop here; we want to check all events,
+		# since they might extend return_on even further.
+
+		if return_on.time() >= day_end:
+			return_on += datetime.timedelta(days=1)
+			return_on = return_on.replace(
+				hour=day_start.hour, minute=day_start.minute,
+				second=day_start.second,
+				microsecond=day_start.microsecond)
+		if return_on.time() < day_start:
+			return_on = return_on.replace(
+				hour=day_start.hour, minute=day_start.minute,
+				second=day_start.second,
+				microsecond=day_start.microsecond)
+		return_on = skip_weekend(return_on,
+			TRIGGERS[trigger_key].get('weekend_days', []))
+		if DEBUG:
+			print 'Day-wrapped return_on: %s.' % return_on
+
+	if orig_return_on.date() >= return_on.date():
+		return None
+	return return_on
+
+def call_subprogram(success_exec, return_on, date_format, msg_template=None):
+	return_on_pretty = return_on.strftime(date_format)
+	try:
+		import roman
+		return_on_roman = '%s, %s %s %s' % (
+			return_on.strftime('%A'),
+			roman.toRoman(int(return_on.strftime('%d'))),
+			return_on.strftime('%B'),
+			roman.toRoman(int(return_on.strftime('%Y'))),
+		)
+	except:
+		return_on_roman = '[Python roman module is not installed]'
+
+	if '@MSG_FILE@' in success_exec:
+		fp = open(os.path.expanduser(os.path.join('~', '.vacation.msg')))
+		msg = ''.join(fp.readlines())
+		fp.close()
+
+		msg = msg.replace('$RETURN_ON_ROMAN', return_on_roman)
+		msg = msg.replace('$RETURN_ON', return_on_pretty)
+
+		tmp = tempfile.NamedTemporaryFile()
+		tmp.file.write(msg)
+		tmp.file.close()
+
+	def expand_args(arg):
+		if arg == '@MSG_FILE@':
+			try:
+				# If a tempfile was generated, return its name.
+				return tmp.name
+			except:
+				# Otherwise, fall through and return the raw arg.
+				pass
+		elif arg == '@RETURN_ON@':
+			return return_on_pretty
+		return arg
+	success_exec = map(expand_args, success_exec)
+
+	if DEBUG:
+		print 'Would invoke "%s", returning on %s.' % (
+			' '.join(success_exec), return_on_pretty,
+		)
+		return
+
+	retcode = subprocess.call(success_exec)
+	if retcode != 0:
+		raise Exception(
+			'Subprogram invocation failed with exitstatus %d.' % \
+				retcode)
+
+def main(trigger_key, who, success_exec, options):
+	cache = os.path.expanduser(EVENTS_CACHE)
+	expires_after = EVENTS_CACHE_LIFETIME.days * 60 * 60 + \
+		EVENTS_CACHE_LIFETIME.seconds
+
+	fd = -1
+	try:
+		fd = os.open(cache, os.O_RDWR | os.O_CREAT,
+			stat.S_IRUSR | stat.S_IWUSR)
+		fcntl.flock(fd, fcntl.LOCK_EX)
+		st = os.stat(cache)
+	except IOError, e:
+		if fd != -1:
+			os.close(fd)
+		print >>sys.stderr, \
+			'Failed to open and lock event cache %s: %s' % (cache, str(e))
+		return EX_SOFTWARE
+
+	# If the cache doesn't already exist, creating and locking it
+	# creates a zero-byte file, which would cause cPickle to raise
+	# an EOFError.
+	if st[stat.ST_SIZE] > 0 and \
+	   st[stat.ST_MTIME] + expires_after >= time.time():
+		pickled = os.read(fd, st[stat.ST_SIZE])
+		if len(pickled) != st[stat.ST_SIZE]:
+			os.close(fd)
+			print >>sys.stderr, \
+				'Short read from pickled events cache %s.' % \
+				cache
+			return EX_TEMPFAIL
+		tz, events = cPickle.loads(pickled)
+		os.environ['TZ'] = tz
+		time.tzset()
+
+		if DEBUG:
+			print 'Using cached events from %s in timezone %s.' % (
+				cache, tz
+			)
+	else:
+		try:
+			events = get_events(
+				TRIGGERS[trigger_key].get('day_start',
+					datetime.time(hour=0)),
+				TRIGGERS[trigger_key].get('day_end',
+					datetime.time(hour=23, minute=59, second=59)),
+				TRIGGERS[trigger_key].get('weekend_days', [])
+			)
+
+			pickled = cPickle.dumps([os.environ['TZ'], events])
+			os.ftruncate(fd, 0)
+			if len(pickled) != os.write(fd, pickled):
+				os.close(fd)
+				print >>sys.stderr, \
+					'Short write to pickled events cache %s.' % \
+					cache
+				return EX_TEMPFAIL
+		except Exception, e:
+			os.close(fd)
+			print >>sys.stderr, str(e)
+			return EX_TEMPFAIL
+
+	os.close(fd)
+
+	return_on = expected_return(datetime.datetime.now(),
+		events, trigger_key, who)
+
+	if not return_on:
+		if DEBUG:
+			print 'Not %s.' % trigger_key
+		if success_exec:
+			return EX_OK
+		# The specified condition hasn't been met.
+		return 1
+
+	if DEBUG:
+		print 'Will return on: %s' % return_on
+
+	if success_exec:
+		try:
+			call_subprogram(success_exec, return_on,
+				options.date_format, options.msg_template)
+		except Exception, e:
+			print >>sys.stderr, str(e)
+			return EX_TEMPFAIL
+
+	# The subprogram has been successfully invoked, and/or
+	# the specified condition has been met.
+	return EX_OK
+
+try:
+	import unittest
+except:
+	unittest.TestCase = Object
+
+class ExpectedReturnTest(unittest.TestCase):
+	def setUp(self):
+		global TRIGGERS
+
+		self._removeStaleEvents()
+		# We use some year ~far off in the future so we have
+		# a playground to make our mess in, ensuring our test
+		# events don't scribble on a calendar time period
+		# someone might care about while the test suite is
+		# running.
+		#
+		# Also, we need to use the same month that we're
+		# currently in. Differing daylight savings time
+		# states can cause problems I don't care enough
+		# to sort out since they should only affect the
+		# test suite:
+		#
+		# Creating event am-i.testcase vacation
+		#   2020-05-11 14:00:00 - 2020-05-11 16:00:00
+		# Event: am-i.testcase vacation, from
+		#   2020-05-11T14:00:00.000-04:00 to
+		#   2020-05-11T15:00:00.000-04:00
+		self.days = calendar.Calendar().monthdatescalendar(
+			date.datetime.now().year + 10,
+			datetime.datetime.now().month)[0]
+
+		TRIGGERS = {
+			'vacation': {
+				'keywords': ['pto', 'vacation'],
+				'day_start': datetime.time(hour=8),
+				'day_end': datetime.time(hour=16),
+				'weekend_days': [
+					calendar.SATURDAY,
+					calendar.SUNDAY,
+				],
+			},
+		}
+
+	def tearDown(self):
+		# Remove stale events after the test case, too,
+		# so we don't leave the last test case's events
+		# hanging around.
+		self._removeStaleEvents()
+
+	def _removeStaleEvents(self):
+		query = gdata.calendar.service.CalendarEventQuery(
+			text_query='am-i.testcase')
+		query.max_results = 10000
+		query.orderby = 'starttime'
+
+		cal = calService()
+		feed = cal.CalendarQuery(query)
+		for event in feed.entry:
+			# We search for events containing this string
+			# in the calendar query, but it doesn't hurt
+			# to be defensive since we're removing events.
+			if 'am-i.testcase' not in event.title.text:
+				continue
+			if DEBUG:
+				print 'Removing stale test event %s (%s - %s)' % (
+					event.title.text, event.when[0].start_time,
+					event.when[0].end_time,
+				)
+			cal.DeleteEvent(event.GetEditLink().href)
+
+	def _createEvent(self, title, start, end):
+		if DEBUG:
+			print 'Creating event %s (%s - %s)' % (title, start, end)
+
+		event = gdata.calendar.CalendarEventEntry()
+		event.title = atom.Title(text=title)
+
+		offset_str = timezoneOffsetString()
+		event.when.append(gdata.calendar.When(
+			start_time=start.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str,
+			end_time=end.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str
+		))
+
+		cal = calService()
+		return cal.InsertEvent(event,
+			'/calendar/feeds/default/private/full')
+
+	def test_all_day_event(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		event = self._createEvent(
+			'%s %s' % (who, trigger_key),
+			self.days[calendar.TUESDAY],
+			self.days[calendar.WEDNESDAY],
+		)
+
+		# After day_end the day before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.WEDNESDAY],
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.MONDAY],
+					TRIGGERS[trigger_key]['day_end']),
+				[event], trigger_key, who))
+
+		# Before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.WEDNESDAY],
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				self.days[calendar.TUESDAY],
+				[event], trigger_key, who))
+
+		# At the start of the event
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.WEDNESDAY],
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				self.days[calendar.TUESDAY],
+				[event], trigger_key, who))
+
+	def test_partial_day_event_before_day_end(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		event_end = datetime.datetime.combine(
+			self.days[calendar.MONDAY],
+			TRIGGERS[trigger_key]['day_end'])
+		event_end -= datetime.timedelta(hours=2)
+		event_start = event_end - datetime.timedelta(hours=2)
+		event = self._createEvent(
+			'%s %s' % (who, trigger_key),
+			event_start, event_end,
+		)
+
+		# Before
+		self.assertEqual(
+			None,
+			expected_return(
+				self.days[calendar.MONDAY],
+				[event], trigger_key, who))
+
+		# At the start of the event
+		self.assertEqual(
+			None,
+			expected_return(
+				event_start, [event], trigger_key, who))
+
+	def test_partial_day_event_at_day_end(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		event_end = datetime.datetime.combine(
+			self.days[calendar.MONDAY],
+			TRIGGERS[trigger_key]['day_end'])
+		event_start = event_end - datetime.timedelta(hours=2)
+		event = self._createEvent(
+			'%s %s' % (who, trigger_key),
+			event_start, event_end
+		)
+
+		# Before
+		self.assertEqual(
+			None,
+			expected_return(self.days[calendar.MONDAY],
+				[event], trigger_key, who))
+
+		# At the start of the event
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.TUESDAY],
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(event_start,
+				[event], trigger_key, who))
+
+	def test_partial_day_event_at_day_end_before_weekend(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		event_end = datetime.datetime.combine(
+			self.days[calendar.FRIDAY],
+			TRIGGERS[trigger_key]['day_end'])
+		event_start = event_end - datetime.timedelta(hours=2)
+		event = self._createEvent(
+			'%s %s' % (who, trigger_key),
+			event_start, event_end
+		)
+
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] + 
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(event_start,
+				[event], trigger_key, who))
+
+		self.assertEqual(
+			None,
+			expected_return(self.days[calendar.FRIDAY],
+				[event], trigger_key, who))
+
+	def test_partial_day_event_at_day_end_before_weekend_then_more_elig_events(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		event_end = datetime.datetime.combine(
+			self.days[calendar.FRIDAY],
+			TRIGGERS[trigger_key]['day_end'])
+		event_start = event_end - datetime.timedelta(hours=2)
+		following_monday = self.days[calendar.MONDAY] + \
+			datetime.timedelta(days=7)
+		events = [
+			self._createEvent(
+				'%s %s' % (who, trigger_key),
+				event_start, event_end
+			),
+			self._createEvent(
+				'%s %s' % (who, trigger_key),
+				following_monday,
+				following_monday + datetime.timedelta(days=1)
+			),
+		]
+
+		self.assertEqual(
+			datetime.datetime.combine(
+				following_monday + datetime.timedelta(days=1),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(event_start,
+				events, trigger_key, who))
+
+		self.assertEqual(
+			None,
+			expected_return(self.days[calendar.FRIDAY],
+				events, trigger_key, who))
+
+	def test_in_weeklong_event(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		event = self._createEvent(
+			'%s %s' % (who, trigger_key),
+			self.days[calendar.MONDAY],
+			self.days[calendar.SATURDAY],
+		)
+
+		# Midnight before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				self.days[calendar.MONDAY],
+				[event], trigger_key, who))
+
+		# During
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.TUESDAY],
+					datetime.time(hour=12)),
+				[event], trigger_key, who))
+
+		# Weekend before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.SATURDAY] -
+						datetime.timedelta(days=7),
+					datetime.time(hour=12)),
+				[event], trigger_key, who))
+
+		# Before
+		self.assertEqual(
+			None,
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.FRIDAY] -
+						datetime.timedelta(days=7),
+					datetime.time(hour=12)),
+				[event], trigger_key, who))
+
+	def test_string_of_separate_all_day_events(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		events = []
+		for day in self.days:
+			events.append(self._createEvent(
+				'%s %s' % (who, trigger_key),
+				day, day + datetime.timedelta(days=1)
+			))
+
+		# Midnight before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.MONDAY],
+					datetime.time()),
+				events, trigger_key, who))
+
+		# During
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				self.days[calendar.WEDNESDAY],
+				events, trigger_key, who))
+
+		# Weekend before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.SATURDAY] -
+						datetime.timedelta(days=7),
+					datetime.time()),
+				events, trigger_key, who))
+
+		# Before
+		self.assertEqual(
+			None,
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.FRIDAY] -
+						datetime.timedelta(days=7),
+					datetime.time()),
+				events, trigger_key, who))
+
+	def test_string_of_separate_workday_events(self):
+		trigger_key = 'vacation'
+		who = 'am-i.testcase'
+		events = []
+		for day in self.days:
+			events.append(self._createEvent(
+				'%s %s' % (who, trigger_key),
+				datetime.datetime.combine(day,
+					TRIGGERS[trigger_key]['day_start']),
+				datetime.datetime.combine(day,
+					TRIGGERS[trigger_key]['day_end']),
+			))
+
+		# Midnight before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.MONDAY],
+					datetime.time()),
+				events, trigger_key, who))
+
+		# During
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				self.days[calendar.WEDNESDAY],
+				events, trigger_key, who))
+
+		# Weekend before
+		self.assertEqual(
+			datetime.datetime.combine(
+				self.days[calendar.MONDAY] +
+					datetime.timedelta(days=7),
+				TRIGGERS[trigger_key]['day_start']),
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.SATURDAY] -
+						datetime.timedelta(days=7),
+					datetime.time()),
+				events, trigger_key, who))
+
+		# Before
+		self.assertEqual(
+			None,
+			expected_return(
+				datetime.datetime.combine(
+					self.days[calendar.FRIDAY] -
+						datetime.timedelta(days=7),
+					datetime.time()),
+				events, trigger_key, who))
+
+if __name__ == '__main__':
+	parser = optparse.OptionParser(
+		usage='%%prog [-d] [-m] [-t] %s USERNAME -- [SUBPROGRAM [ARG...]]' %
+			'|'.join(sorted(TRIGGERS)),
+		version='%prog $Id$')
+	parser.add_option('-d', '--date-format', dest='date_format',
+		default='%A, %d %B',
+		metavar='FORMAT',
+		help='specify a strftime() format to use for the return date')
+	parser.add_option('-m', '--message', dest='msg_template',
+		default=os.path.expanduser(os.path.join('~', '.vacation.msg')),
+		metavar='FILE',
+		help='message template to pass as the subprogram\'s @MSG_FILE@ argument')
+	parser.add_option('-t', '--test', dest='test', default=False,
+		action='store_true',
+		help='run the test suite')
+
+	(options, args) = parser.parse_args()
+
+	if options.test:
+		# unittest.main() parses arguments too, so pass
+		# along any non-option arguments to it.
+		sys.argv[1:] = args
+
+		unittest.main()
+		sys.exit(0)
+
+	if len(args) < 2:
+		parser.print_usage()
+		sys.exit(EX_USAGE)
+
+	if args[0] not in TRIGGERS:
+		print 'Action must be one of: %s' % \
+			', '.join(sorted(TRIGGERS))
+		parser.print_usage()
+		sys.exit(EX_USAGE)
+
+	try:
+		sys.exit(main(args[0], args[1], args[2:], options))
+	except Exception, e:
+		print >>sys.stderr, str(e)
+		traceback.print_exc(file=sys.stderr)
+		sys.exit(EX_TEMPFAIL)
