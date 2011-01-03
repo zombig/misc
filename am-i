@@ -94,7 +94,6 @@ import calendar
 import cPickle
 import datetime
 import fcntl
-import re
 import optparse
 import os
 import stat
@@ -182,6 +181,8 @@ EX_USAGE = 64
 EX_TEMPFAIL = 75
 
 def calService():
+	"""Get a Google Calendar service handle."""
+
 	try:
 		return calService.cal
 	except:
@@ -196,13 +197,13 @@ def calService():
 	calService.cal.ProgrammaticLogin()
 
 	feed = calService.cal.GetAllCalendarsFeed()
-	for c in feed.entry:
-		if c.title.text != CALENDAR_NAME:
+	for gcal in feed.entry:
+		if gcal.title.text != CALENDAR_NAME:
 			continue
 
 		if DEBUG:
-			print 'Feed timezone: %s' % c.timezone.value
-		os.environ['TZ'] = c.timezone.value
+			print 'Feed timezone: %s' % gcal.timezone.value
+		os.environ['TZ'] = gcal.timezone.value
 		time.tzset()
 		break
 	else:
@@ -211,7 +212,10 @@ def calService():
 
 	return calService.cal
 
-def timezoneOffsetString():
+def timezone_offset_string():
+	"""Get the current timezone's offset as a string. For example,
+	'-04:00'"""
+
 	if time.localtime().tm_isdst:
 		tz_offset = -time.altzone / 60
 	else:
@@ -234,17 +238,11 @@ def get_events(day_start, day_end, weekend_days):
 	query.orderby = 'starttime'
 
 	start = datetime.datetime.now()
-	# If it's after ~business hours, consider the next day's events.
-	if start.time() >= day_end:
-		start += datetime.timedelta(days=1)
-		start = start.replace(
-			hour=day_start.hour, minute=day_start.minute,
-			second=day_start.second,
-			microsecond=day_start.microsecond)
+	start = wrap_day(start, day_start, day_end)
 	# Weekends consider the following Monday's events.
 	start = skip_weekend(start, weekend_days)
 
-	offset_str = timezoneOffsetString()
+	offset_str = timezone_offset_string()
 
 	query.start_min = start.strftime('%Y-%m-%dT%H:%M:%S') + offset_str
 	query.start_max = datetime.datetime.combine(
@@ -263,12 +261,15 @@ def get_events(day_start, day_end, weekend_days):
 	return feed.entry
 
 def gcal2datetime(when):
+	"""Convert a Google Calendar date and time string to a
+	datetime.datetime instance."""
+	
 	try:
 		return datetime.datetime.strptime(when[:23], "%Y-%m-%dT%H:%M:%S.000")
-	except:
+	except ValueError:
 		try:
 			return datetime.datetime.strptime(when, "%Y-%m-%d")
-		except:
+		except ValueError:
 			return None
 
 def skip_weekend(when, days):
@@ -276,6 +277,19 @@ def skip_weekend(when, days):
 		if DEBUG:
 			print '%s is during the weekend, adding one day.' % when
 		when += datetime.timedelta(days=1)
+	return when
+
+def wrap_day(when, day_start, day_end):
+	"""If a datetime object is after the end of the workday, wrap it
+	to the beginning of the next day."""
+
+	if when.time() >= day_end:
+		when += datetime.timedelta(days=1)
+		when = datetime.datetime.combine(
+			when.date(), day_start)
+	if when.time() < day_start:
+		when = datetime.datetime.combine(
+			when.date(), day_start)
 	return when
 
 def eligible_event(event, who, trigger_key):
@@ -290,6 +304,9 @@ def eligible_event(event, who, trigger_key):
 	return False
 
 def expected_return(now, events, trigger_key, who):
+	"""Calculate the date a condition no longer applies, honoring
+	weekends and workday start/end."""
+
 	if DEBUG:
 		print 'Now: %s' % now
 
@@ -303,17 +320,7 @@ def expected_return(now, events, trigger_key, who):
 	day_end = TRIGGERS[trigger_key].get('day_end',
 		datetime.time(hour=16))
 
-	if return_on.hour >= day_end.hour:
-		return_on += datetime.timedelta(days=1)
-		return_on = return_on.replace(
-			hour=day_start.hour, minute=day_start.minute,
-			second=day_start.second,
-			microsecond=day_start.microsecond)
-	if return_on.hour < day_start.hour:
-		return_on = return_on.replace(
-			hour=day_start.hour, minute=day_start.minute,
-			second=day_start.second,
-			microsecond=day_start.microsecond)
+	return_on = wrap_day(return_on, day_start, day_end)
 	return_on = skip_weekend(return_on,
 		TRIGGERS[trigger_key].get('weekend_days', []))
 	orig_return_on = return_on
@@ -341,17 +348,7 @@ def expected_return(now, events, trigger_key, who):
 		# Don't stop the loop here; we want to check all events,
 		# since they might extend return_on even further.
 
-		if return_on.time() >= day_end:
-			return_on += datetime.timedelta(days=1)
-			return_on = return_on.replace(
-				hour=day_start.hour, minute=day_start.minute,
-				second=day_start.second,
-				microsecond=day_start.microsecond)
-		if return_on.time() < day_start:
-			return_on = return_on.replace(
-				hour=day_start.hour, minute=day_start.minute,
-				second=day_start.second,
-				microsecond=day_start.microsecond)
+		return_on = wrap_day(return_on, day_start, day_end)
 		return_on = skip_weekend(return_on,
 			TRIGGERS[trigger_key].get('weekend_days', []))
 		if DEBUG:
@@ -371,11 +368,11 @@ def call_subprogram(success_exec, return_on, date_format, msg_template=None):
 			return_on.strftime('%B'),
 			roman.toRoman(int(return_on.strftime('%Y'))),
 		)
-	except:
+	except ImportError:
 		return_on_roman = '[Python roman module is not installed]'
 
 	if '@MSG_FILE@' in success_exec:
-		fp = open(os.path.expanduser(os.path.join('~', '.vacation.msg')))
+		fp = open(os.path.expanduser(msg_template))
 		msg = ''.join(fp.readlines())
 		fp.close()
 
@@ -391,13 +388,17 @@ def call_subprogram(success_exec, return_on, date_format, msg_template=None):
 			try:
 				# If a tempfile was generated, return its name.
 				return tmp.name
-			except:
+			except NameError:
 				# Otherwise, fall through and return the raw arg.
 				pass
 		elif arg == '@RETURN_ON@':
 			return return_on_pretty
 		return arg
-	success_exec = map(expand_args, success_exec)
+	success_exec = [
+		expand_args(arg)
+		for arg
+		 in success_exec
+	]
 
 	if DEBUG:
 		print 'Would invoke "%s", returning on %s.' % (
@@ -427,7 +428,7 @@ def main(trigger_key, who, success_exec, options):
 			os.close(fd)
 		print >>sys.stderr, \
 			'Failed to open and lock event cache %s: %s' % (cache, str(e))
-		return EX_SOFTWARE
+		return EX_TEMPFAIL
 
 	# If the cache doesn't already exist, creating and locking it
 	# creates a zero-byte file, which would cause cPickle to raise
@@ -503,7 +504,7 @@ def main(trigger_key, who, success_exec, options):
 try:
 	import unittest
 except:
-	unittest.TestCase = Object
+	unittest.TestCase = object
 
 class ExpectedReturnTest(unittest.TestCase):
 	def setUp(self):
@@ -528,7 +529,7 @@ class ExpectedReturnTest(unittest.TestCase):
 		#   2020-05-11T14:00:00.000-04:00 to
 		#   2020-05-11T15:00:00.000-04:00
 		self.days = calendar.Calendar().monthdatescalendar(
-			date.datetime.now().year + 10,
+			datetime.datetime.now().year + 10,
 			datetime.datetime.now().month)[0]
 
 		TRIGGERS = {
@@ -577,7 +578,7 @@ class ExpectedReturnTest(unittest.TestCase):
 		event = gdata.calendar.CalendarEventEntry()
 		event.title = atom.Title(text=title)
 
-		offset_str = timezoneOffsetString()
+		offset_str = timezone_offset_string()
 		event.when.append(gdata.calendar.When(
 			start_time=start.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str,
 			end_time=end.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str
