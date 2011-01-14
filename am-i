@@ -295,7 +295,8 @@ def wrap_day(when, day_start, day_end):
 def eligible_event(event, who, trigger_key):
 	for word in event.title.text.split():
 		if trigger_key == 'vacation' and \
-		   word.lower() in TRIGGERS.get('vacation_everyone', []):
+		   'vacation_everyone' in TRIGGERS and \
+		   word.lower() in TRIGGERS['vacation_everyone']['keywords']:
 			return True
 		if who in event.title.text and \
 		   word.lower() in TRIGGERS[trigger_key]['keywords']:
