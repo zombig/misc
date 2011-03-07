@@ -1,0 +1,2 @@
+content togglev6 content/
+overlay chrome://browser/content/browser.xul chrome://togglev6/content/overlay.xul

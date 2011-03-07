@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<RDF xmlns="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+	 xmlns:em="http://www.mozilla.org/2004/em-rdf#">
+
+	<Description about="urn:mozilla:install-manifest">
+		<em:id>{60bdc398-8c69-459c-80e3-d8c555f13cb9}</em:id>
+		<em:name>ToggleV6</em:name>
+		<em:version>1.0</em:version>
+
+		<em:description>Enable or disable IPv6 from the status bar.</em:description>
+		<em:creator>John Morrissey &lt;jwm@horde.net&gt;</em:creator>
+
+		<em:iconURL>chrome://togglev6/content/togglev6.png</em:iconURL>
+
+		<em:targetApplication>
+			<Description>
+				<em:id>{ec8030f7-c20a-464f-9b0e-13a3a9e97384}</em:id>
+				<em:minVersion>3.5</em:minVersion>
+				<em:maxVersion>4.0b12</em:maxVersion>
+			</Description>
+		</em:targetApplication>
+	</Description>
+</RDF>
