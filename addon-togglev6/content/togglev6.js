@@ -1,5 +1,5 @@
 if (!net) {
-	var net = {};
+	net = {};
 }
 if (!net.horde) {
 	net.horde = {};
@@ -191,7 +191,7 @@ net.horde.togglev6.StatusListener = {
 			if (net.horde.togglev6.debug) {
 				net.horde.togglev6.console.logStringMessage('ignored response');
 			}
-			net.horde.togglev6.seen.splice(index, 1);
+			net.horde.togglev6.seenResponses.splice(index, 1);
 			return;
 		}
 
