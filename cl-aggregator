@@ -1,7 +1,7 @@
 #!/usr/bin/python -tt
 
-# cl-aggregator v1.0 - aggregate craigslist rss feeds into a single feed
-# Copyright (c) 2008-9, John Morrissey <jwm@horde.net>
+# cl-aggregator v1.0.1 - aggregate craigslist rss feeds into a single feed
+# Copyright (c) 2008 - 2011, John Morrissey <jwm@horde.net>
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,18 +26,7 @@
 # NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from datetime import datetime
-import sys
-try:
-	import hashlib
-	md5_constructor = hashlib.md5
-except ImportError:
-	import md5
-	md5_constructor = md5.new
-
-import feedparser
-import PyRSS2Gen
-
+OUTFILE = '/path/to/rss/output/file'
 FEEDS = [
 	'http://anchorage.craigslist.org/search/XXX?query=QUERYformat=rss',
 	'http://auburn.craigslist.org/search/XXX?query=QUERYformat=rss',
@@ -368,6 +357,18 @@ FEEDS = [
 	'http://wyoming.craigslist.org/search/XXX?query=QUERYformat=rss',
 ]
 
+from datetime import datetime
+import sys
+try:
+	import hashlib
+	md5_constructor = hashlib.md5
+except ImportError:
+	import md5
+	md5_constructor = md5.new
+
+import feedparser
+import PyRSS2Gen
+
 seen_hashes = []
 dupes = 0
 items = []
@@ -394,9 +395,9 @@ for feed in FEEDS:
 
 PyRSS2Gen.RSS2(
 	title='craigslist aggregator',
-	link='http://horde.net/~jwm/.rss',
+	link='',
 	description='Craigslist Aggregator',
 	lastBuildDate=datetime.now(),
-	items=items).write_xml(open('/home/jwm/public_html/.rss', 'w'))
+	items=items).write_xml(open(OUTFILE, 'w'))
 
 #print 'Saw %d unique entries, %d dupes.' % (len(seen_hashes), dupes)
