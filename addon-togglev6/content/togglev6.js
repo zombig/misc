@@ -1,5 +1,5 @@
 if (!net) {
-	net = {};
+	var net = {};
 }
 if (!net.horde) {
 	net.horde = {};
@@ -12,6 +12,8 @@ net.horde.togglev6.debug = false;
 net.horde.togglev6.desiredSetting = null;
 net.horde.togglev6.numPendingRequests = 0;
 net.horde.togglev6.seenResponses = new Array();
+net.horde.togglev6.uninstalling = false;
+net.horde.togglev6.uuid = '{60bdc398-8c69-459c-80e3-d8c555f13cb9}';
 net.horde.togglev6.waitUntilIdle = null;
 
 /* browser instances' webProgress.isLoadingDocument is only set when the
@@ -155,6 +157,70 @@ net.horde.togglev6.PrefListener = {
 		net.horde.togglev6.prefs.QueryInterface(
 			Components.interfaces.nsIPrefBranchInternal).
 			addObserver('network.dns.disableIPv6', this, false);
+	},
+}
+
+net.horde.togglev6.UninstallListener = {
+	observe: function(subject, topic, data)  {
+		if (topic == 'em-action-requested') {
+			subject.QueryInterface(Components.interfaces.nsIUpdateItem);
+			if (subject.id != net.horde.togglev6.uuid) {
+				return;
+			}
+
+			if (data == 'item-uninstalled') {
+				net.horde.togglev6.uninstalling = true;
+			} else if (data == 'item-cancel-action') {
+				net.horde.togglev6.uninstalling = false;
+			}
+		} else if (topic == 'quit-application-granted') {
+			if (!net.horde.togglev6.uninstalling) {
+				return;
+			}
+
+			var origSetting = net.horde.togglev6.prefs.getBoolPref(
+				'extensions.net.horde.togglev6.origDisableIPv6');
+			var curSetting = net.horde.togglev6.prefs.getBoolPref(
+				'network.dns.disableIPv6');
+			net.horde.togglev6.prefs.deleteBranch(
+				'extensions.net.horde.togglev6');
+
+			if (origSetting == curSetting) {
+				/* No need to revert the setting. */
+				return;
+			}
+
+			var prompts = Components
+				.classes['@mozilla.org/embedcomp/prompt-service;1']
+				.getService(Components.interfaces.nsIPromptService);
+
+			var flags =
+				prompts.BUTTON_POS_0 * prompts.BUTTON_TITLE_IS_STRING +
+				prompts.BUTTON_POS_1 * prompts.BUTTON_TITLE_IS_STRING;
+			if (origSetting) {
+				var message = 'IPv6 was disabled when ToggleV6 was installed, but is now enabled. Disable IPv6 before uninstalling?';
+			} else {
+				var message = 'IPv6 was enabled when ToggleV6 was installed, but is now disabled. Enable IPv6 before uninstalling?';
+			}
+
+			var changeSetting = prompts.confirmEx(window,
+				'Restore IPv6 setting?', message, flags,
+				'Yes', 'No', '', null, {value: true});
+			if (changeSetting == 0) {
+				net.horde.togglev6.prefs.setBoolPref(
+					'network.dns.disableIPv6', origSetting);
+			}
+		}
+	},
+
+	register: function() {
+		var observerService = Components
+			.classes['@mozilla.org/observer-service;1']
+			.getService(Components.interfaces.nsIObserverService);
+		observerService.addObserver(this,
+			'em-action-requested', false);
+		observerService.addObserver(this,
+			'quit-application-granted', false);
 	},
 }
 
@@ -312,6 +378,18 @@ net.horde.togglev6.init = function(e) {
 		.getService(Components.interfaces.nsIWindowMediator);
 
 	window.addEventListener('load', function() {
+		var installed = net.horde.togglev6.prefs.getBoolPref(
+			'extensions.net.horde.togglev6.installed');
+		if (!installed) {
+			net.horde.togglev6.prefs.setBoolPref(
+				'extensions.net.horde.togglev6.origDisableIPv6',
+				net.horde.togglev6.prefs.getBoolPref(
+					'network.dns.disableIPv6'));
+			net.horde.togglev6.prefs.setBoolPref(
+				'extensions.net.horde.togglev6.installed', true);
+		}
+
+		net.horde.togglev6.UninstallListener.register();
 		net.horde.togglev6.updateStatusImage(false);
 		net.horde.togglev6.StatusListener.register();
 		net.horde.togglev6.HttpRequestObserver.register();
