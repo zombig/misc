@@ -6,7 +6,7 @@
 		<em:id>{60bdc398-8c69-459c-80e3-d8c555f13cb9}</em:id>
 		<em:type>2</em:type>
 		<em:name>ToggleV6</em:name>
-		<em:version>1.1.2</em:version>
+		<em:version>1.1.3</em:version>
 
 		<em:description>Enable or disable IPv6 from the status bar.</em:description>
 		<em:creator>John Morrissey &lt;jwm@horde.net&gt;</em:creator>
@@ -17,7 +17,7 @@
 			<Description>
 				<em:id>{ec8030f7-c20a-464f-9b0e-13a3a9e97384}</em:id>
 				<em:minVersion>3.5</em:minVersion>
-				<em:maxVersion>4.0b12</em:maxVersion>
+				<em:maxVersion>4.0.*</em:maxVersion>
 			</Description>
 		</em:targetApplication>
 	</Description>

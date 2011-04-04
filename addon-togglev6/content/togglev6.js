@@ -248,7 +248,7 @@ net.horde.togglev6.StatusListener = {
 				net.horde.togglev6.seenResponses.length);
 		}
 
-		index = net.horde.togglev6.seenResponses.indexOf(aRequest);
+		var index = net.horde.togglev6.seenResponses.indexOf(aRequest);
 		if (index != -1) {
 			/* The observer has already decremented
 			 * numPendingRequests for this response, remove the
@@ -381,12 +381,26 @@ net.horde.togglev6.init = function(e) {
 		var installed = net.horde.togglev6.prefs.getBoolPref(
 			'extensions.net.horde.togglev6.installed');
 		if (!installed) {
+			/* Save the original IPv6 state for uninstallation. */
 			net.horde.togglev6.prefs.setBoolPref(
 				'extensions.net.horde.togglev6.origDisableIPv6',
 				net.horde.togglev6.prefs.getBoolPref(
 					'network.dns.disableIPv6'));
 			net.horde.togglev6.prefs.setBoolPref(
 				'extensions.net.horde.togglev6.installed', true);
+
+			/* Add our toolbar button (Firefox 4 and later). */
+			var addonBar = document.getElementById('addon-bar');
+			if (addonBar) {
+				if (!document.getElementById("togglev6-status")) {
+					addonBar.insertItem('togglev6-status',
+						null, null, false);
+					addonBar.setAttribute('currentset',
+						addonBar.getAttribute('currentset') +
+						',togglev6-status');
+					document.persist('addon-bar', 'currentset');
+				}
+			}
 		}
 
 		net.horde.togglev6.UninstallListener.register();
@@ -436,13 +450,25 @@ net.horde.togglev6.updateStatusImage = function(toggleInProgress) {
 		var win = enumerator.getNext();
 
 		var statusImage = win.document.getElementById('togglev6-status-image');
+		if (!statusImage) {
+			/* Firefox >= 4.0. */
+			var statusImage = win.document.getElementById('togglev6-status');
+		}
 
 		if (!toggleInProgress) {
 			if (this.prefs.getBoolPref('network.dns.disableIPv6')) {
-				statusImage.src = 'chrome://togglev6/content/ipv6-off.png';
+				if (typeof statusImage.src == 'undefined') {
+					statusImage.setAttribute('class', 'off');
+				} else {
+					statusImage.src = 'chrome://togglev6/content/ipv6-off.png';
+				}
 				statusImage.tooltipText = 'IPv6 Disabled';
 			} else {
-				statusImage.src = 'chrome://togglev6/content/ipv6-on.png';
+				if (typeof statusImage.src == 'undefined') {
+					statusImage.setAttribute('class', 'on');
+				} else {
+					statusImage.src = 'chrome://togglev6/content/ipv6-on.png';
+				}
 				statusImage.tooltipText = 'IPv6 Enabled';
 			}
 		} else {
@@ -452,10 +478,18 @@ net.horde.togglev6.updateStatusImage = function(toggleInProgress) {
 				statusImage.tooltipText = 'Disabling IPv6 once the network is idle...';
 			}
 
-			if (statusImage.src == 'chrome://togglev6/content/ipv6-toggle0.png') {
-				statusImage.src = 'chrome://togglev6/content/ipv6-toggle1.png';
+			if (typeof statusImage.src == 'undefined') {
+				if (statusImage.getAttribute('class') == 'toggle0') {
+					statusImage.setAttribute('class', 'toggle1');
+				} else {
+					statusImage.setAttribute('class', 'toggle0');
+				}
 			} else {
-				statusImage.src = 'chrome://togglev6/content/ipv6-toggle0.png';
+				if (statusImage.src == 'chrome://togglev6/content/ipv6-toggle0.png') {
+					statusImage.src = 'chrome://togglev6/content/ipv6-toggle1.png';
+				} else {
+					statusImage.src = 'chrome://togglev6/content/ipv6-toggle0.png';
+				}
 			}
 		}
 	}

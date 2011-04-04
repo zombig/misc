@@ -1,2 +1,4 @@
 content togglev6 content/
-overlay chrome://browser/content/browser.xul chrome://togglev6/content/overlay.xul
+overlay chrome://browser/content/browser.xul chrome://togglev6/content/overlay.xul appversion>3.6.*
+style chrome://global/content/customizeToolbar.xul chrome://togglev6/content/toolbar-button.css appversion>3.6.*
+overlay chrome://browser/content/browser.xul chrome://togglev6/content/overlay-3.xul appversion<=3.6.*
