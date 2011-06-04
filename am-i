@@ -90,12 +90,21 @@ from __future__ import with_statement
 #   encountered. This makes the program useful as a condition in shell
 #   scripts or mail filtering recipes.
 
+# This should be ready to run under Python 3, once the Python gdata bindings
+# have Python 3 support:
+#
+#   http://code.google.com/p/gdata-python-client/issues/detail?id=229
+#
+# Python's 'except' syntax changed in Python 3 ('except Exception, e' ->
+# 'except Exception as e'). Support for 'as' has been backported as far
+# as Python 2.6, so this program now requires Python 2.6 or newer.
+
 import calendar
-import cPickle
 import datetime
 import fcntl
 import optparse
 import os
+import pickle
 import stat
 import subprocess
 import sys
@@ -202,7 +211,7 @@ def calService():
 			continue
 
 		if DEBUG:
-			print 'Feed timezone: %s' % gcal.timezone.value
+			print('Feed timezone: %s' % gcal.timezone.value)
 		os.environ['TZ'] = gcal.timezone.value
 		time.tzset()
 		break
@@ -249,9 +258,9 @@ def get_events(day_start, day_end, weekend_days):
 		start.date() + SEARCH_FOR_RETURN, datetime.time()).\
 		strftime('%Y-%m-%dT%H:%M:%S') + offset_str
 	if DEBUG:
-		print 'Fetching events from %s to %s.' % (
+		print('Fetching events from %s to %s.' % (
 			query.start_min, query.start_max,
-		)
+		))
 
 	feed = cal.CalendarQuery(query)
 	# 'orderby starttime' yields most recent entries first,
@@ -275,7 +284,7 @@ def gcal2datetime(when):
 def skip_weekend(when, days):
 	while when.weekday() in days:
 		if DEBUG:
-			print '%s is during the weekend, adding one day.' % when
+			print('%s is during the weekend, adding one day.' % when)
 		when += datetime.timedelta(days=1)
 	return when
 
@@ -309,7 +318,7 @@ def expected_return(now, events, trigger_key, who):
 	weekends and workday start/end."""
 
 	if DEBUG:
-		print 'Now: %s' % now
+		print('Now: %s' % now)
 
 	if type(now) == datetime.date:
 		return_on = datetime.datetime.combine(now, datetime.time())
@@ -328,10 +337,10 @@ def expected_return(now, events, trigger_key, who):
 
 	for event in events:
 		if DEBUG:
-			print 'Event: %s, from %s to %s' % (
+			print('Event: %s, from %s to %s' % (
 				event.title.text, event.when[0].start_time,
 				event.when[0].end_time,
-			)
+			))
 
 		if not eligible_event(event, who, trigger_key):
 			continue
@@ -342,9 +351,9 @@ def expected_return(now, events, trigger_key, who):
 			continue
 
 		if DEBUG:
-			print 'Event bumps return_on from %s to %s.' % (
+			print('Event bumps return_on from %s to %s.' % (
 				return_on, end,
-			)
+			))
 		return_on = end
 		# Don't stop the loop here; we want to check all events,
 		# since they might extend return_on even further.
@@ -353,7 +362,7 @@ def expected_return(now, events, trigger_key, who):
 		return_on = skip_weekend(return_on,
 			TRIGGERS[trigger_key].get('weekend_days', []))
 		if DEBUG:
-			print 'Day-wrapped return_on: %s.' % return_on
+			print('Day-wrapped return_on: %s.' % return_on)
 
 	if orig_return_on.date() >= return_on.date():
 		return None
@@ -402,9 +411,9 @@ def call_subprogram(success_exec, return_on, date_format, msg_template=None):
 	]
 
 	if DEBUG:
-		print 'Would invoke "%s", returning on %s.' % (
+		print('Would invoke "%s", returning on %s.' % (
 			' '.join(success_exec), return_on_pretty,
-		)
+		))
 		return
 
 	retcode = subprocess.call(success_exec)
@@ -424,33 +433,37 @@ def main(trigger_key, who, success_exec, options):
 			stat.S_IRUSR | stat.S_IWUSR)
 		fcntl.flock(fd, fcntl.LOCK_EX)
 		st = os.stat(cache)
-	except IOError, e:
+	except IOError as e:
 		if fd != -1:
 			os.close(fd)
-		print >>sys.stderr, \
-			'Failed to open and lock event cache %s: %s' % (cache, str(e))
+		sys.stderr.write(
+			'Failed to open and lock event cache %s: %s\n' % (
+				cache, str(e)
+			)
+		)
 		return EX_TEMPFAIL
 
 	# If the cache doesn't already exist, creating and locking it
-	# creates a zero-byte file, which would cause cPickle to raise
+	# creates a zero-byte file, which would cause pickle to raise
 	# an EOFError.
 	if st[stat.ST_SIZE] > 0 and \
 	   st[stat.ST_MTIME] + expires_after >= time.time():
 		pickled = os.read(fd, st[stat.ST_SIZE])
 		if len(pickled) != st[stat.ST_SIZE]:
 			os.close(fd)
-			print >>sys.stderr, \
-				'Short read from pickled events cache %s.' % \
+			sys.stderr.write(
+				'Short read from pickled events cache %s.' %
 				cache
+			)
 			return EX_TEMPFAIL
-		tz, events = cPickle.loads(pickled)
+		tz, events = pickle.loads(pickled)
 		os.environ['TZ'] = tz
 		time.tzset()
 
 		if DEBUG:
-			print 'Using cached events from %s in timezone %s.' % (
+			print('Using cached events from %s in timezone %s.' % (
 				cache, tz
-			)
+			))
 	else:
 		try:
 			events = get_events(
@@ -461,17 +474,19 @@ def main(trigger_key, who, success_exec, options):
 				TRIGGERS[trigger_key].get('weekend_days', [])
 			)
 
-			pickled = cPickle.dumps([os.environ['TZ'], events])
+			pickled = pickle.dumps([os.environ['TZ'], events])
 			os.ftruncate(fd, 0)
 			if len(pickled) != os.write(fd, pickled):
 				os.close(fd)
-				print >>sys.stderr, \
-					'Short write to pickled events cache %s.' % \
+				sys.stderr.write(
+					'Short write to pickled events cache %s.\n' %
 					cache
+				)
 				return EX_TEMPFAIL
-		except Exception, e:
+		except Exception as e:
 			os.close(fd)
-			print >>sys.stderr, str(e)
+			sys.stderr.write(str(e))
+			sys.stderr.write('\n')
 			return EX_TEMPFAIL
 
 	os.close(fd)
@@ -481,21 +496,22 @@ def main(trigger_key, who, success_exec, options):
 
 	if not return_on:
 		if DEBUG:
-			print 'Not %s.' % trigger_key
+			print('Not %s.' % trigger_key)
 		if success_exec:
 			return EX_OK
 		# The specified condition hasn't been met.
 		return 1
 
 	if DEBUG:
-		print 'Will return on: %s' % return_on
+		print('Will return on: %s' % return_on)
 
 	if success_exec:
 		try:
 			call_subprogram(success_exec, return_on,
 				options.date_format, options.msg_template)
-		except Exception, e:
-			print >>sys.stderr, str(e)
+		except Exception as e:
+			sys.stderr.write(str(e))
+			sys.stderr.write('\n')
 			return EX_TEMPFAIL
 
 	# The subprogram has been successfully invoked, and/or
@@ -566,15 +582,15 @@ class ExpectedReturnTest(unittest.TestCase):
 			if 'am-i.testcase' not in event.title.text:
 				continue
 			if DEBUG:
-				print 'Removing stale test event %s (%s - %s)' % (
+				print('Removing stale test event %s (%s - %s)' % (
 					event.title.text, event.when[0].start_time,
 					event.when[0].end_time,
-				)
+				))
 			cal.DeleteEvent(event.GetEditLink().href)
 
 	def _createEvent(self, title, start, end):
 		if DEBUG:
-			print 'Creating event %s (%s - %s)' % (title, start, end)
+			print('Creating event %s (%s - %s)' % (title, start, end))
 
 		event = gdata.calendar.CalendarEventEntry()
 		event.title = atom.Title(text=title)
@@ -936,14 +952,15 @@ if __name__ == '__main__':
 		sys.exit(EX_USAGE)
 
 	if args[0] not in TRIGGERS:
-		print 'Action must be one of: %s' % \
-			', '.join(sorted(TRIGGERS))
+		print('Action must be one of: %s' % \
+			', '.join(sorted(TRIGGERS)))
 		parser.print_usage()
 		sys.exit(EX_USAGE)
 
 	try:
 		sys.exit(main(args[0], args[1], args[2:], options))
-	except Exception, e:
-		print >>sys.stderr, str(e)
+	except Exception as e:
+		sys.stderr.write(str(e))
+		sys.stderr.write('\n')
 		traceback.print_exc(file=sys.stderr)
 		sys.exit(EX_TEMPFAIL)
