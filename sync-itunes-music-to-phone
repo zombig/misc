@@ -1,7 +1,7 @@
 #!/usr/bin/python -tt
 
-# iTunes -> mobile phone synchronizer v1.0
-# Copyright (c) 2010, John Morrissey <jwm@horde.net>
+# iTunes -> mobile phone synchronizer v1.0.1
+# Copyright (c) 2010, 2011, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of Version 2 of the GNU General Public License as
@@ -319,7 +319,7 @@ for playlist, filemap in sorted(files.items()):
 
 # Walk the destination and remove any files that we don't want to keep
 # (i.e., remove anything in DEST that isn't in wanted_dest_files).
-for path, dirs, files in os.walk(DEST):
+for path, dirs, files in os.walk(DEST, followlinks=True):
 	for file in files:
 		if file.endswith('.m3u'):
 			continue
@@ -335,7 +335,7 @@ for path, dirs, files in os.walk(DEST):
 			os.unlink(full_path)
 
 # Finally, prune any empty directories.
-for path, dirs, files in os.walk(DEST):
+for path, dirs, files in os.walk(DEST, followlinks=True):
 	if len(files) > 0 or len(dirs) > 0:
 		continue
 
