@@ -601,9 +601,9 @@ def is_screen_attached(file=None, pid=None):
 				pid, str(e)))
 			return None
 
-		if '(Detached)' in stdout:
+		if 'detached' in stdout.lower():
 			return False
-		elif '(Attached)' in stdout:
+		elif 'attached' in stdout.lower():
 			return True
 		else:
 			# No screen found for this PID, try its parent unless we've
