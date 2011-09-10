@@ -450,9 +450,9 @@ openlog(basename(sys.argv[0]), LOG_PID)
 """Determine whether a notification condition matches."""
 def condition_matches(condition, cond_value):
 	if condition == 'after':
-		if type(cond_value) == type(datetime.time()):
-			now_value = datetime.time()
-		elif type(cond_value) == type(datetime.datetime()):
+		if type(cond_value) == datetime.time():
+			now_value = datetime.datetime.now().time()
+		elif type(cond_value) == datetime.datetime():
 			now_value = datetime.datetime.now()
 			now_value.microsecond = 0
 		else:
@@ -474,9 +474,9 @@ def condition_matches(condition, cond_value):
 		return cond_value == (not sticky)
 
 	if condition == 'before':
-		if type(cond_value) == type(datetime.time()):
-			now_value = datetime.time()
-		elif type(cond_value) == type(datetime.datetime()):
+		if type(cond_value) == datetime.time():
+			now_value = datetime.datetime.now().time()
+		elif type(cond_value) == datetime.datetime():
 			now_value = datetime.datetime.now()
 			now_value.microsecond = 0
 		else:
