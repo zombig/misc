@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# TinyFugue notifier v1.5.1
+# TinyFugue notifier v1.5.2
 # Copyright (c) 2008, Matthew J. Ernisse <mernisse@ub3rgeek.net>
 # Copyright (c) 2008-9, 2011, John Morrissey <jwm@horde.net>
 # All rights reserved.
@@ -29,6 +29,11 @@
 
 
 # Change history:
+# v1.5.2 (10 Sep 2011):
+# - Fix before/after comparisons: compare against the current time instead
+#   of always assuming it's midnight.
+# - More resilient detection of attached/detached screen state.
+#
 # v1.5.1 (9 Sep 2011):
 # - Assume the screen containing tf is detached if no screen is found.
 #
