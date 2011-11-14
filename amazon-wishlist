@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# amazon-wishlist v0.2.1
+# amazon-wishlist v0.3
 # Copyright (c) 2008-9, John Morrissey <jwm@horde.net>
 # All rights reserved.
 #
@@ -33,7 +33,10 @@ AWS_XML_NS = 'http://webservices.amazon.com/AWSECommerceService/2005-10-05'
 
 # MCLS branches I prefer.
 BRANCHES = [
-	'CENTRL', 'MGRW-E', 'EVNS-W', 'HENRI',
+	'Evans Branch West - Irondequoit Library',
+	'Henrietta Public Library',
+	'McGraw Branch East - Irondequoit Library',
+	'Rochester Public Library Central',
 ]
 
 
@@ -41,12 +44,13 @@ from base64 import b64encode
 from datetime import date
 import hashlib
 import hmac
+import json
 import re
 import sys
 from time import gmtime, strftime
 from urllib import quote_plus, urlencode
 from urllib2 import Request
-from urlparse import urljoin, urlparse
+from urlparse import parse_qs, urljoin, urlparse
 from xml.etree.ElementTree import ElementTree
 
 import html5lib
@@ -54,8 +58,7 @@ import mechanize
 from BeautifulSoup import Comment as BeautifulSoupComment
 
 class MclsScraper(object):
-	endpoint = 'http://www.rochester.lib.ny.us:2080/cgi-bin/cw_cgi'
-	session = None
+	endpoint = 'http://classic.libraryweb.org/carlweb/jsp/'
 
 	def _parse_result(self, body):
 		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
@@ -68,111 +71,86 @@ class MclsScraper(object):
 		if soup.find(text=re.compile(r'No matches were found')):
 			return []
 
-		try:
-			where = soup.find(attrs={'name': 'where'}).\
-				findNextSibling('table').findAll('tr')
-		except:
+		marcid = soup.find('td', {'class': 'MARCtaglabel'})
+		if not marcid:
 			return []
+		id = (marcid.findParents('tr')[0].
+			find(text=re.compile(r'^\s*\d+\s*$')).strip())
 
-		fields = {}
-		i = 0
-		for col in where[0].findAll('td'):
-			value = col.find(text=True).strip()
-			if value == 'Biblioteca':
-				value = 'Branch'
-			elif value == u'Ubicaci\xf3n':
-				value = 'Location'
-			elif value == 'Fecha':
-				value = 'Date'
-			elif value == u'Clasificaci\xf3n':
-				value = 'Call Number'
-			elif value == 'Estado':
-				value = 'Status'
-			fields[value] = i
-			i += 1
+		branches_req = Request(
+			'%sGetDisplayBranches?databaseID=720&controlNumber=%s' % (
+				self.endpoint, id,
+			)
+		)
+		branches_req.add_header('User-Agent', 'amazon-wishlist 0.3')
+		data = mechanize.urlopen(branches_req)
+		body = ''.join(data.fp.readlines()).strip()
+		if not body:
+			return []
+		branches = json.loads(body)
 
 		locations = []
-		for location in where[1:]:
-			locinfo = {}
-			cells = location.findAll('td')
-			for pretty, td_index in fields.iteritems():
-				value = cells[td_index].find(text=True).strip()
+		for branch in branches:
+			branch_req = Request(
+				'%sGetDisplayItems?databaseID=720&controlNumber=%s&branchID=%s' % (
+					self.endpoint, id, branch['BRANCHID']
+				)
+			)
+			branch_req.add_header('User-Agent', 'amazon-wishlist 0.3')
+			data = mechanize.urlopen(branch_req)
 
-				if pretty == 'Branch':
-					value = cells[td_index].find('a')['name']
-				elif pretty == 'Date':
-					if value:
-						month, day, year = [int(i) for i in value.split('/')]
-						if year >= 0 and year <= date.today().year:
-							year += 2000
-						else:
-							year += 1900
-						value = date(year, month, day)
-				elif pretty == 'Status':
-					locinfo['Available'] = (value in ['Not Checked Out', 'No prestado'])
-
-				locinfo[pretty] = value
-
-			locations.append(locinfo)
+			branch_item = json.loads(''.join(data.fp.readlines()))
+			locations.append({
+				'Branch': branch['BRANCHNAME'],
+				'Call Number': ', '.join([
+					item['CALLNUM']
+					for item
+					 in branch_item
+				]),
+				'Available': branch['NUMAVAILABLE'],
+			})
 		return locations
 
 	def get_info(self, type, title, author):
-		if not self.session:
-			auth = Request('%s?5000+REDIRX' % self.endpoint)
-			auth.add_header('User-Agent', 'amazon-wishlist 0.2')
-			data = mechanize.urlopen(auth)
-
-			parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
-			soup = parser.parse(''.join(data.fp.readlines()))
-			self.session = re.sub(r'\D*(\d+)\D.*', '\\1',
-				soup.find('form')['action'])
-
-		auth = Request('%s?customSearchFinish+%s' % (self.endpoint, self.session),
-			urlencode((
-				('database', '720'),
-				('search1', '//w'),
-				('terms1', ''),
-				('bool1', 'and'),
-				('Search', 'Search'),
-				('search2', '//n'),
-				('terms2', author.encode('utf-8')),
-				('bool2', 'and'),
-				('search3', '//tw/'),
-				('terms3', title.encode('utf-8')),
-				('bool3', 'and'),
-				('search4', '//sd/'),
-				('terms4', ''),
-				('bool4', 'and'),
-				('search5', '//ed/'),
-				('terms5', ''),
-				('spellcheck', 'false'),
-				('keywords1', type),
-				('keywords2', '--none--'),
-				('datelimit', '>'),
-				('year1', ''),
-				('year2', ''),
-				('limiter_count', '3'),
-				('branch', ''),
-				('Available', 'no'),
-			))
+		search = Request(
+			'%sDoSearch?%s' % (
+				self.endpoint,
+				urlencode([
+					('databaseID', 720),
+					('count', 10),
+					('index', 'w'),
+					('terms', '%s %s' % (title, author)),
+				])
+			)
 		)
-		auth.add_header('User-Agent', 'amazon-wishlist 0.2')
-		data = mechanize.urlopen(auth)
+		search.add_header('User-Agent', 'amazon-wishlist 0.3')
+		data = mechanize.urlopen(search)
+
+		results = Request('%stitlelist.jsp' % self.endpoint)
+		results.add_header('User-Agent', 'amazon-wishlist 0.3')
+		data = mechanize.urlopen(results)
 
 		body = ''.join(data.fp.readlines())
 		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
 		soup = parser.parse(body)
 		result_uris = []
-		for rec in soup.findAll(href=re.compile('fullRecord')):
-			if rec['href'] not in result_uris:
-				result_uris.append(rec['href'])
+		for tr in soup.findAll('tr'):
+			if 'eBook' in tr:
+				continue
+			for rec in tr.findAll(href=re.compile('FullRecord')):
+				if rec['href'] not in result_uris:
+					result_uris.append(rec['href'])
 		if len(result_uris) == 0:
 			return self._parse_result(body)
 
 		locations = []
 		for uri in result_uris:
-			auth = Request(urljoin('%s?customSearchFinish+%s' % (self.endpoint, self.session), uri))
-			auth.add_header('User-Agent', 'amazon-wishlist 0.2')
+			auth = Request('%s%s' % (self.endpoint, uri))
+			auth.add_header('User-Agent', 'amazon-wishlist 0.3')
+			data = mechanize.urlopen(auth)
+
+			auth = Request('%sfullrecord.jsp' % (self.endpoint))
+			auth.add_header('User-Agent', 'amazon-wishlist 0.3')
 			locations.extend(self._parse_result(''.join(mechanize.urlopen(auth).fp.readlines())))
 		return locations
 
@@ -231,7 +209,7 @@ class RitScraper(object):
 		auth = Request(
 			'http://albert.rit.edu/search/X?t:(%s)+and+a:(%s)&searchscope=3&SORT=A' % \
 			(quote_plus(title), quote_plus(author)))
-		auth.add_header('User-Agent', 'amazon-wishlist 0.2')
+		auth.add_header('User-Agent', 'amazon-wishlist 0.3')
 		data = mechanize.urlopen(auth)
 
 		body = ''.join(data.fp.readlines())
@@ -249,9 +227,30 @@ class RitScraper(object):
 		locations = []
 		for uri in result_uris:
 			item = Request(urljoin(auth.get_full_url(), uri))
-			item.add_header('User-Agent', 'amazon-wishlist 0.2')
+			item.add_header('User-Agent', 'amazon-wishlist 0.3')
 			locations.extend(self._parse_result(''.join(mechanize.urlopen(item).fp.readlines())))
 		return locations
+
+def get_wishlist_body(url):
+	if not url.startswith('http'):
+		url = 'http://www.amazon.com' + url
+
+	wishlist = Request(url)
+	wishlist.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_6_8) AppleWebKit/535.1 (KHTML, like Gecko) Chrome/14.0.835.186 Safari/535.1')
+	data = mechanize.urlopen(wishlist)
+	body = ''.join(data.fp.readlines())
+
+	parser = html5lib.HTMLParser(
+		tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+	return parser.parse(body)
+
+def get_asins(body):
+	list = body.find(attrs={'class': 'compact-items wlrdZeroTable'})
+
+	asins = []
+	for item in list.findAll('tbody'):
+		asins.append(re.sub(r'.*\.', r'', item['name']))
+	return asins
 
 def ele(ns, item, name):
 	if item is None:
@@ -266,32 +265,44 @@ def elet(item, name):
 		return ''
 	return node.text
 
-def loadPage(wishlist_id, num):
+def loadItems(wishlist_id):
 	global AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_XML_NS
 
 	mcls = MclsScraper()
 	rit = RitScraper()
 
-	qs_dict = {
-		'Service': 'AWSECommerceService',
-		'AWSAccessKeyId': AWS_ACCESS_KEY,
-		'Operation': 'ListLookup',
-		'ListType': 'WishList',
-		'ListId': wishlist_id,
-		'ResponseGroup': 'Medium',
-		'BrowseNodes': 'True',
-		'ProductPage': num,
-	}
-	url = sign_amazon_req(AWS_SECRET_KEY, 'GET',
-		'http://webservices.amazon.com/onca/xml', qs_dict)
+	body = get_wishlist_body(
+		'http://www.amazon.com/registry/wishlist/%s/ref=cm_wl_sb?reveal=unpurchased&filter=all&sort=date-added&layout=compact' % wishlist_id)
+	asins = []
+	asins = get_asins(body)
 
-	auth = Request(url)
-	auth.add_header('User-Agent', 'amazon-wishlist 0.2')
-	data = mechanize.urlopen(auth)
+	page_links = body.find(attrs={'class': 'pagDiv'}).findAll('a')
+	for link in page_links:
+		page_num = link.find(text=re.compile(r'^\d+$'))
+		if not page_num:
+			continue
+		asins.extend(get_asins(get_wishlist_body(link['href'])))
 
 	items = []
-	tree = ElementTree(file=data)
-	for item in tree.getroot().findall('.//{%s}Item' % (AWS_XML_NS)):
+	for asin in asins:
+		qs_dict = {
+			'Service': 'AWSECommerceService',
+			'AWSAccessKeyId': AWS_ACCESS_KEY,
+			'Operation': 'ItemLookup',
+			'IdType': 'ASIN',
+			'ItemId': asin,
+			'Condition': 'All',
+			'ResponseGroup': 'Medium',
+			'AssociateTag': '0',
+		}
+		url = sign_amazon_req(AWS_SECRET_KEY, 'GET',
+			'http://webservices.amazon.com/onca/xml', qs_dict)
+		auth = Request(url)
+		auth.add_header('User-Agent', 'amazon-wishlist 0.3')
+
+		tree = ElementTree(file=mechanize.urlopen(auth))
+		item = tree.getroot().find('.//{%s}Item' % (AWS_XML_NS))
+
 		img = ele(AWS_XML_NS, item, 'MediumImage')
 		attrs = ele(AWS_XML_NS, item, 'ItemAttributes')
 		offers = ele(AWS_XML_NS, item, 'OfferSummary')
@@ -352,7 +363,7 @@ def loadPage(wishlist_id, num):
 			mcls_info = mcls.get_info(type, search_title, search_author)
 		except Exception, e:
 			print 'Unable to retrieve MCLS info for %s: %s' % (
-				this_item['title'], str(e))
+				this_item['title'].encode('utf-8'), str(e))
 			mcls_info = []
 
 		branches = {}
@@ -375,7 +386,7 @@ def loadPage(wishlist_id, num):
 			rit_info = rit.get_info(None, search_title, this_item.get('by', ''))
 		except Exception, e:
 			print 'Unable to retrieve RIT info for %s: %s' % (
-				this_item['title'], str(e))
+				this_item['title'].encode('utf-8'), str(e))
 			rit_info = []
 
 		if len(rit_info) > 0:
@@ -405,11 +416,11 @@ def displayItems(items):
 		print '<a href="%s">' % item['url']
 		print '<img style="float: left" src="%s" height="%s" width="%s" alt="%s">' % (
 			item['img']['url'], item['img']['height'],
-			item['img']['width'], item['img']['caption']
+			item['img']['width'], item['img']['caption'].encode('utf-8')
 		)
 		print '</a>'
 
-		print item['title'], '<br>'
+		print item['title'].encode('utf-8'), '<br>'
 		if 'by' in item:
 			print item['by'].encode('utf-8'), '<br>'
 
@@ -460,26 +471,6 @@ def sign_amazon_req(key, method, url, qs_dict):
 
 	return '%s?%s&Signature=%s' % (url, qs, sig)
 
-qs_dict = {
-	'Service': 'AWSECommerceService',
-	'AWSAccessKeyId': AWS_ACCESS_KEY,
-	'Operation': 'ListLookup',
-	'ListType': 'WishList',
-	'ListId': WISHLIST_ID,
-}
-url = sign_amazon_req(AWS_SECRET_KEY, 'GET',
-	'http://webservices.amazon.com/onca/xml', qs_dict)
-auth = Request(url)
-auth.add_header('User-Agent', 'amazon-wishlist 0.2')
-
-tree = ElementTree(file=mechanize.urlopen(auth))
-pagecount = int(elet(tree, 'TotalPages'))
-
-items = []
-for page in range(1, pagecount + 1):
-	items.extend(loadPage(WISHLIST_ID, page))
-items.sort(lambda a, b: cmp('/'.join(a['sort']), '/'.join(b['sort'])))
-
 print '''
 <!DOCTYPE html>
 <html>
@@ -513,6 +504,7 @@ print '''
 <ul>
 '''
 
+items = loadItems(WISHLIST_ID)
 displayItems(items)
 
 print '''
