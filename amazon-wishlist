@@ -57,6 +57,9 @@ import html5lib
 import mechanize
 from BeautifulSoup import Comment as BeautifulSoupComment
 
+cj = mechanize.LWPCookieJar()
+opener = mechanize.build_opener(mechanize.HTTPCookieProcessor(cj))
+
 class MclsScraper(object):
 	endpoint = 'http://classic.libraryweb.org/carlweb/jsp/'
 
@@ -83,7 +86,7 @@ class MclsScraper(object):
 			)
 		)
 		branches_req.add_header('User-Agent', 'amazon-wishlist 0.3')
-		data = mechanize.urlopen(branches_req)
+		data = opener.open(branches_req)
 		body = ''.join(data.fp.readlines()).strip()
 		if not body:
 			return []
@@ -97,7 +100,7 @@ class MclsScraper(object):
 				)
 			)
 			branch_req.add_header('User-Agent', 'amazon-wishlist 0.3')
-			data = mechanize.urlopen(branch_req)
+			data = opener.open(branch_req)
 
 			branch_item = json.loads(''.join(data.fp.readlines()))
 			locations.append({
@@ -107,11 +110,12 @@ class MclsScraper(object):
 					for item
 					 in branch_item
 				]),
-				'Available': branch['NUMAVAILABLE'],
+				'numAvailable': int(branch['NUMAVAILABLE']),
 			})
 		return locations
 
 	def get_info(self, type, title, author):
+		cj.clear()
 		search = Request(
 			'%sDoSearch?%s' % (
 				self.endpoint,
@@ -120,15 +124,16 @@ class MclsScraper(object):
 					('count', 10),
 					('index', 'w'),
 					('terms', '%s %s' % (title, author)),
+					('keywords', type),
 				])
 			)
 		)
 		search.add_header('User-Agent', 'amazon-wishlist 0.3')
-		data = mechanize.urlopen(search)
+		data = opener.open(search)
 
 		results = Request('%stitlelist.jsp' % self.endpoint)
 		results.add_header('User-Agent', 'amazon-wishlist 0.3')
-		data = mechanize.urlopen(results)
+		data = opener.open(results)
 
 		body = ''.join(data.fp.readlines())
 		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
@@ -147,11 +152,11 @@ class MclsScraper(object):
 		for uri in result_uris:
 			auth = Request('%s%s' % (self.endpoint, uri))
 			auth.add_header('User-Agent', 'amazon-wishlist 0.3')
-			data = mechanize.urlopen(auth)
+			data = opener.open(auth)
 
 			auth = Request('%sfullrecord.jsp' % (self.endpoint))
 			auth.add_header('User-Agent', 'amazon-wishlist 0.3')
-			locations.extend(self._parse_result(''.join(mechanize.urlopen(auth).fp.readlines())))
+			locations.extend(self._parse_result(''.join(opener.open(auth).fp.readlines())))
 		return locations
 
 class RitScraper(object):
