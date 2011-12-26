@@ -385,8 +385,7 @@ def loadItems(wishlist_id):
 				if 'Call Number' in avail:
 					branches[avail['Branch']]['call'] = avail['Call Number']
 
-			if avail['Available']:
-				branches[avail['Branch']]['count'] += 1
+			branches[avail['Branch']]['count'] += avail['numAvailable']
 		this_item['mcls'] = branches
 
 		try:
