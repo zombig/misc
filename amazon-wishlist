@@ -348,9 +348,9 @@ def loadItems(wishlist_id):
 
 		group = elet(attrs, 'ProductGroup')
 		if group == 'Book':
-			type = 'qbook'
+			type = 'Book=qbook'
 		elif group == 'Music':
-			type = 'qcd'
+			type = 'Music CD=qmusiccompactdisc'
 		else:
 			type = ''
 
