@@ -29,7 +29,7 @@
 AWS_ACCESS_KEY = ''
 AWS_SECRET_KEY = ''
 WISHLIST_ID = ''
-AWS_XML_NS = 'http://webservices.amazon.com/AWSECommerceService/2005-10-05'
+AWS_XML_NS = 'http://webservices.amazon.com/AWSECommerceService/2011-08-01'
 
 # MCLS branches I prefer.
 BRANCHES = [
