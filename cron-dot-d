@@ -899,9 +899,9 @@ test_run_cmd_got_stdout_and_stderr_via_email()
 	touch "$__shunit_tmpDir/tmp/envfile"
 	rm -f "$__shunit_tmpDir/tmp/output"
 
-	expected='Cron <root@coral> echo to-stdout; echo to-stderr 1>&2
+	expected="Cron <root@$(hostname -s)> echo to-stdout; echo to-stderr 1>&2
 to-stdout
-to-stderr'
+to-stderr"
 	assertEquals "$expected" \
 		"$(run_cmd "$__shunit_tmpDir/tmp/envfile" root \
 			'echo to-stdout; echo to-stderr 1>&2' '')"
