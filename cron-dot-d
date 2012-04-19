@@ -1,0 +1,1124 @@
+#!/bin/sh
+
+# cron.d emulator for OSes (like OpenBSD) that don't support cron.d natively.
+#
+# Add to /etc/crontab as:
+#   * * * * * root cron-dot-d
+
+# Copyright (c) 2012, John Morrissey
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+#    * Redistributions of source code must retain the above copyright
+#      notice, this list of conditions and the following disclaimer.
+#    * Redistributions in binary form must reproduce the above copyright
+#      notice, this list of conditions and the following disclaimer in the
+#      documentation and/or other materials provided with the distribution.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+# IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+translate()
+{
+	local value=$1
+	shift
+
+	local type=$1
+	shift
+
+	case $type in
+	digit)
+		case $value in
+		[0-9])
+			echo "$value"
+			return 0
+			;;
+		[0-9][0-9])
+			# Strip leading zero if present, so later numeric
+			# comparisons don't try to treat this as octal.
+			echo "${value#0}"
+			return 0
+			;;
+		*)
+			echo 1>&2 "$progname: Invalid value: $value"
+			return 1
+			;;
+		esac
+		;;
+	weekday)
+		value=$(echo "$value" | tr A-Z a-z)
+
+		case $value in
+		[0-7])
+			echo "$value"
+			return 0
+			;;
+		sun)
+			echo 0
+			return 0
+			;;
+		mon)
+			echo 1
+			return 0
+			;;
+		tue)
+			echo 2
+			return 0
+			;;
+		wed)
+			echo 3
+			return 0
+			;;
+		thu)
+			echo 4
+			return 0
+			;;
+		fri)
+			echo 5
+			return 0
+			;;
+		sat)
+			echo 6
+			return 0
+			;;
+		*)
+			echo 1>&2 "$progname: Invalid weekday value: $value"
+			return 1
+			;;
+		esac
+		;;
+	month)
+		value=$(echo "$value" | tr A-Z a-z)
+
+		case $value in
+		[1-9]|10|11|12)
+			echo "$value"
+			return 0
+			;;
+		0[1-9])
+			echo "${value#0}"
+			return 0
+			;;
+		jan)
+			echo 1
+			return 0
+			;;
+		feb)
+			echo 2
+			return 0
+			;;
+		mar)
+			echo 3
+			return 0
+			;;
+		apr)
+			echo 4
+			return 0
+			;;
+		may)
+			echo 5
+			return 0
+			;;
+		jun)
+			echo 6
+			return 0
+			;;
+		jul)
+			echo 7
+			return 0
+			;;
+		aug)
+			echo 8
+			return 0
+			;;
+		sep)
+			echo 9
+			return 0
+			;;
+		oct)
+			echo 10
+			return 0
+			;;
+		nov)
+			echo 11
+			return 0
+			;;
+		dec)
+			echo 12
+			return 0
+			;;
+		*)
+			echo 1>&2 "$progname: Invalid month value: $value"
+			return 1
+			;;
+		esac
+		;;
+	*)
+		echo 1>&2 "$progname: Invalid type: $type"
+		return 1
+		;;
+	esac
+
+	return 1
+}
+
+expand_range()
+{
+	local first=$1
+	shift
+
+	local last=$1
+	shift
+
+	local step=$1
+	shift
+
+	if [ $first -gt $last ]; then
+		local temp=$first
+		first=$last
+		last=$temp
+	fi
+	while [ $first -le $last ]; do
+		echo "$first"
+		first=$(($first + $step))
+	done
+
+	return 0
+}
+
+expand_field()
+{
+	local field=$1
+	shift
+
+	local all_range=$1
+	shift
+
+	local type=$1
+	shift
+
+	while [ ! -z "$field" ]; do
+		item=${field%%,*}
+
+		# Remove the current item from $field.
+		if echo "$field" | fgrep -q ','; then
+			field=${field#*,}
+		else
+			# No more commas.
+			field=''
+		fi
+
+		step=1
+		if echo "$item" | fgrep -q '/'; then
+			step=${item#*/}
+			item=${item%/*}
+
+			if ! echo "$step" | grep -q '^[[:digit:]]\{1,\}$'; then
+				echo 1>&2 "$progname: Invalid step: $step"
+				return 1
+			fi
+		fi
+
+		if [ "$item" = '*' ]; then
+			item=$all_range
+		fi
+
+		if ! echo "$item" | fgrep -q '-'; then
+			if ! item=$(translate "$item" "$type"); then
+				echo 1>&2 "$progname: Invalid value: $item"
+				return 1
+			fi
+
+			echo "$item"
+			continue
+		fi
+
+		if ! echo "$item" | grep -q '^[^-]\{1,\}-[^-]\{1,\}$'; then
+			echo 1>&2 "$progname: Invalid range: $item"
+			return 1
+		fi
+
+		first=${item%-*}
+		if ! first=$(translate "$first" "$type"); then
+			echo 1>&2 "$progname: Invalid value: $first"
+			return 1
+		fi
+
+		last=${item#*-}
+		if ! last=$(translate "$last" "$type"); then
+			echo 1>&2 "$progname: Invalid value: $last"
+			return 1
+		fi
+
+		expand_range "$first" "$last" "$step"
+	done
+
+	return 0
+}
+
+matching_minute()
+{
+	local minute=$1
+	shift
+
+	local now_minute=$1
+	shift
+
+	for minute in $(expand_field "$minute" 0-59 digit); do
+		if [ $minute -eq $now_minute ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+matching_hour()
+{
+	local hour=$1
+	shift
+
+	local now_hour=$1
+	shift
+
+	for hour in $(expand_field "$hour" 0-23 digit); do
+		if [ $hour -eq $now_hour ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+matching_dom()
+{
+	local dom=$1
+	shift
+
+	local now_dom=$1
+	shift
+
+	for dom in $(expand_field "$dom" 1-31 digit); do
+		if [ $dom -eq $now_dom ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+matching_month()
+{
+	local month=$1
+	shift
+
+	local now_month=$1
+	shift
+
+	for month in $(expand_field "$month" 1-12 month); do
+		if [ $month -eq $now_month ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+matching_dow()
+{
+	local dow=$1
+	shift
+
+	local now_dow=$1
+	shift
+
+	for dow in $(expand_field "$dow" 0-6 weekday); do
+		# %w returns 0-6, so map 7 to 0.
+		if [ "$dow" -eq 7 ]; then
+			dow=0
+		fi
+
+		if [ $dow -eq $now_dow ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+run_cmd()
+{
+	local envfile=$1
+	shift
+
+	local user=$1
+	shift
+
+	local cmd=$1
+	shift
+
+	local stdin=$1
+	shift
+
+	local cmdfile
+	local name value
+
+	if ! cmdfile=$(mktemp -t 'cmd.XXXXXXXXXX'); then
+		return 1
+	fi
+	if ! outfile=$(mktemp -t 'out.XXXXXXXXXX'); then
+		return 1
+	fi
+
+	# Sequester ourselves in a subshell, since we're about to
+	# dink with the environment.
+	#
+	# We can't just export these envvars in $cmdfile, since we want to
+	# keep our treatment of environment variables as close as possible
+	# to cron(8)'s, which doesn't support interpolation of other
+	# variables.
+	#
+	# Besides, if we wrote $value to $cmdfile, we'd have to deal with
+	# quoting, which is always a fun time in the shell.
+	(
+		unset SUDO_USER
+		unset SUDO_UID
+		unset SUDO_COMMAND
+		unset SUDO_GID
+
+		echo "$cmd" >>"$cmdfile"
+		# chown(8) is (8) on OpenBSD, and therefore in /sbin.
+		export PATH="$PATH:/sbin"
+		chown "$user" "$cmdfile"
+		chmod u+x "$cmdfile"
+
+		export SHELL=/bin/sh
+		export PATH=/usr/bin:/bin
+		export HOME=$(getent passwd "$user" | cut -d: -f6)
+		# These are still root, and sudo(8) doesn't override them.
+		export USER=$user
+		export LOGNAME=$user
+
+		while read name value; do
+			export $name="$value"
+		done <"$envfile"
+
+		logger -it "$progname" "($user) CMD ($cmd)"
+		cd "$HOME"
+		echo "$stdin" | sudo -sEu "$user" \
+			"$SHELL" "$cmdfile" >"$outfile" 2>&1
+	)
+	exitstatus=$?
+
+	if [ -s "$outfile" ]; then
+		while read name value; do
+			if [ "$name" = MAILTO ]; then
+				mailto=$value
+			fi
+		done <"$envfile"
+
+		if [ -z "$mailto" ]; then
+			mailto=$user
+		fi
+
+		if [ $runtests -eq 1 ]; then
+			echo "Cron <$user@$(hostname -s)> $cmd"
+			cat "$outfile"
+		else
+			mail -s "Cron <$user@$(hostname -s)> $cmd" "$mailto" <"$outfile"
+		fi
+	fi
+
+	rm -f "$cmdfile" "$outfile"
+	return $exitstatus
+}
+
+run_from_part()
+{
+	local filename=$1
+	shift
+
+	local now=$1
+	shift
+
+	local envfile
+	local now_minute now_hour now_dom now_month now_dow
+	local junk
+	local minute hour dom month dow user cmd
+	local stdin
+
+	if ! envfile=$(mktemp -t 'cmd.XXXXXXXXXX'); then
+		return 1
+	fi
+
+	sed \
+		-e 's/^[[:space:]]*//' \
+		-e 's/^#.*//' \
+		-e 's/[[:space:]]*$//' \
+		-e '/^$/d' \
+		-e 's/^@annually/@yearly/' \
+		-e 's/^@yearly/0 0 1 1 */' \
+		-e 's/^@monthly/0 0 1 * */' \
+		-e 's/^@weekly/0 0 * * 0/' \
+		-e 's/^@midnight/@daily/' \
+		-e 's/^@daily/0 0 * * */' \
+		-e 's/^@hourly/0 * * * */' \
+		"$filename" |
+	while read line; do
+		case $line in
+		@reboot[' 	']*)
+			# If we're rebooting, run @reboot jobs now.
+			# Otherwise, skip this crontab entry.
+			if [ "$now" != @reboot ]; then
+				continue
+			fi
+
+			timespec=${line%%[ 	]*}
+			line=${line#*[ 	]}
+
+			user=${line%%[ 	]*}
+			line=${line#*[ 	]}
+
+			cmd=$line
+
+			stdin=$(echo "$cmd" | sed 's/.*[^\]%//')
+			cmd=$(echo "$cmd" | sed 's/[^\]%.*//')
+
+			run_cmd "$envfile" "$user" "$cmd" "$stdin"
+			continue
+			;;
+		esac
+
+		# An environment setting is of the form,
+		#
+		#	 name = value
+		#
+		# where the spaces around the equal-sign (=) are optional, and any
+		# subsequent non-leading spaces in value will be part of the value
+		# assigned to name. The value string may be placed in quotes (single or
+		# double, but matching) to preserve leading or trailing blanks. To
+		# define an empty variable, quotes must be used. The value string is
+		# not parsed for environmental substitutions or replacement of
+		# variables, thus lines like
+		#
+		#	PATH = $HOME/bin:$PATH
+		#
+		# will not work as you might expect. And neither will this work
+		#
+		#	 A=1
+		#	 B=2
+		#	 C=$A $B
+		#
+		# There will not be any subsitution for the defined variables in the
+		# last value.
+
+		# Sadly, we can't match this as a shell pattern in the
+		# enclosing case statement (without extglob, at least)
+		# so we'll use grep(1).
+		if echo "$line" | grep '^[A-Z][A-Z0-9]*[[:space:]]*='; then
+			# Environment variable
+			name=$(echo "$line" |
+				sed 's/^\([A-Z][A-Z0-9]*\)[[:space:]]*=.*/\1/')
+			value=$(echo "$line" |
+				sed 's/^[A-Z][A-Z0-9]*[[:space:]]*=[[:space:]]*\(.*\)/\1/')
+
+			if [ -z "$value" ]; then
+				# Skip empty values that aren't quoted.
+				continue
+			fi
+
+			# Dispel leading/trailing quotes, with some
+			# extra paranoia to make sure that it's the
+			# same quote character at both ends
+			# (i.e., not 'foo" or "foo').
+			if [ "$value" != "${value#\'}" ] &&
+			   [ "$value" != "${value%\'}" ]; then
+				value=${value#\'}
+				value=${value%\'}
+			fi
+			if [ "$value" != "${value#\"}" ] &&
+			   [ "$value" != "${value%\"}" ]; then
+				value=${value#\"}
+				value=${value%\"}
+			fi
+
+			echo "$name $value" >>"$envfile"
+			continue
+		fi
+
+		# We've handled @reboot and environment variable
+		# declarations; the only remaining possibility
+		# is a crontab entry.
+
+		# Split $now into its components.
+		now_minute=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_hour=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_dom=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_month=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_dow=$now
+
+		# Split $line into its components.
+		minute=${line%%[ 	]*}
+		line=${line#*[ 	]}
+
+		hour=${line%%[ 	]*}
+		line=${line#*[ 	]}
+
+		dom=${line%%[ 	]*}
+		line=${line#*[ 	]}
+
+		month=${line%%[ 	]*}
+		line=${line#*[ 	]}
+
+		dow=${line%%[ 	]*}
+		line=${line#*[ 	]}
+
+		user=${line%%[ 	]*}
+		line=${line#*[ 	]}
+
+		# Remove leading whitespace.
+		cmd=$line
+		while true; do
+			case $cmd in
+			' '*|'	'*)
+				cmd=${cmd#[ 	]}
+				;;
+			*)
+				break
+				;;
+			esac
+		done
+
+		# Separate the stdin portion from the command,
+		# and un-escape any '%'.
+		stdin=$(echo "$cmd" | sed 's/.*[^\]%//')
+		cmd=$(echo "$cmd" | sed 's/[^\]%.*//')
+
+		if ! matching_minute "$minute" "$now_minute" ||
+		   ! matching_hour "$hour" "$now_hour" ||
+		   ! matching_month "$month" "$now_month"; then
+
+			continue
+		fi
+
+		if matching_dom "$dom" "$now_dom" &&
+		   matching_dow "$dow" "$now_dow"; then
+
+			run_cmd "$envfile" "$user" "$cmd" "$stdin"
+		elif [ "$dom" != '*' ] && [ "$dow" != '*' ]; then
+			if matching_dom "$dom" "$now_dom" ||
+			   matching_dow "$dow" "$now_dow"; then
+				# From cronab(5):
+				#
+				# Note: The day of a command's execution can be specified by two
+				# fields — day of month, and day of week. If both fields are
+				# restricted (i.e., aren't *), the command will be run when either
+				# field matches the current time.
+
+				run_cmd "$envfile" "$user" "$cmd" "$stdin"
+			fi
+		fi
+	done
+
+	rm -f "$envfile"
+	return 0
+}
+
+test_translate_single_digit()
+{
+	assertEquals 5 "$(translate 5 digit)"
+}
+test_translate_digit_strip_leading_zero()
+{
+	assertEquals 5 "$(translate 05 digit)"
+}
+
+test_translate_digit_weekday_numeric()
+{
+	assertEquals 5 "$(translate 5 weekday)"
+}
+test_translate_digit_weekday_name()
+{
+	assertEquals 5 "$(translate fri weekday)"
+}
+test_translate_digit_weekday_name_non_lowercase()
+{
+	assertEquals 5 "$(translate Fri weekday)"
+}
+test_translate_digit_weekday_name_invalid()
+{
+	assertFalse 'translate FROMAGE weekday'
+}
+
+test_translate_digit_month_numeric()
+{
+	assertEquals 5 "$(translate 5 month)"
+}
+test_translate_digit_month_name()
+{
+	assertEquals 5 "$(translate may month)"
+}
+test_translate_digit_month_name_non_lowercase()
+{
+	assertEquals 5 "$(translate May month)"
+}
+test_translate_digit_month_name_invalid()
+{
+	assertFalse 'translate FROMAGE month'
+}
+
+test_expand_range()
+{
+	expected=$(echo 1 2 3 4 5 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_range 1 5 1)"
+}
+test_expand_range_reversed_first_last()
+{
+	expected=$(echo 1 2 3 4 5 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_range 5 1 1)"
+}
+test_expand_range_non_unit_step()
+{
+	expected=$(echo 2 4 6 8 10 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_range 2 10 2)"
+}
+
+test_expand_field_single_value()
+{
+	assertEquals "15" "$(expand_field 15 0-59 digit)"
+}
+test_expand_field_invalid_single_value()
+{
+	assertFalse "expand_field FROMAGE 0-59 digit"
+}
+test_expand_field_transslate_weekday_name_to_num()
+{
+	assertEquals 3 "$(expand_field wed 0-7 weekday)"
+}
+test_expand_field_transslate_month_name_to_num()
+{
+	assertEquals 10 "$(expand_field oct 1-12 month)"
+}
+test_expand_field_invalid_range()
+{
+	assertFalse "expand_field 5-10-15 0-59 digit"
+	assertFalse "expand_field 5-10*15 0-59 digit"
+	assertFalse "expand_field -15 0-59 digit"
+	assertFalse "expand_field foo 0-59 digit"
+}
+test_expand_field_range()
+{
+	expected=$(echo 15 16 17 18 19 20 21 22 23 24 25 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field 15-25 0-59 digit)"
+}
+test_expand_field_weekday_range()
+{
+	expected=$(echo 3 4 5 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field wed-fri 0-7 weekday)"
+	assertEquals "$expected" "$(expand_field WED-FRI 0-7 weekday)"
+	assertEquals "$expected" "$(expand_field Wed-Fri 0-7 weekday)"
+}
+test_expand_field_month_range()
+{
+	expected=$(echo 1 2 3 4 5 6 7 8 9 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field jan-sep 1-12 month)"
+	assertEquals "$expected" "$(expand_field JAN-SEP 1-12 month)"
+	assertEquals "$expected" "$(expand_field Jan-Sep 1-12 month)"
+}
+test_expand_field_star()
+{
+	expected=$(echo 1 2 3 4 5 6 7 8 9 10 11 12 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field '*' 1-12 month)"
+}
+test_expand_field_invalid_step()
+{
+	assertFalse "expand_field '*/foo' 0-59 digit"
+}
+test_expand_field_with_step()
+{
+	expected=$(echo 0 10 20 30 40 50 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field '*/10' 0-59 digit)"
+}
+test_expand_field_range_with_step()
+{
+	expected=$(echo 15 20 25 30 35 40 45 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field 15-45/5 0-59 digit)"
+}
+test_expand_field_multiple_ranges()
+{
+	expected=$(echo 15 16 17 18 19 20 45 46 47 48 49 50 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field 15-20,45-50 0-59 digit)"
+}
+test_expand_field_multiple_ranges_one_with_step()
+{
+	expected=$(echo 15 16 17 18 19 20 45 50 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field 15-20,45-50/5 0-59 digit)"
+}
+test_expand_field_multiple_ranges_both_with_step()
+{
+	expected=$(echo 15 20 25 45 50 | tr ' ' '\n')
+	assertEquals "$expected" "$(expand_field 15-25/5,45-50/5 0-59 digit)"
+}
+
+test_matching_minute()
+{
+	assertTrue 'matching_minute 1-30 5'
+	assertTrue 'matching_minute 1-30 1'
+	assertTrue 'matching_minute 1-30 30'
+	assertFalse 'matching_minute 1-30 31'
+	assertFalse 'matching_minute 1-30 59'
+}
+test_matching_hour()
+{
+	assertTrue 'matching_hour 1-6 3'
+	assertTrue 'matching_hour 1-6 1'
+	assertTrue 'matching_hour 1-6 6'
+	assertFalse 'matching_hour 1-6 7'
+	assertFalse 'matching_hour 1-6 23'
+}
+test_matching_dom()
+{
+	assertTrue 'matching_dom 1-9 3'
+	assertTrue 'matching_dom 1-9 1'
+	assertTrue 'matching_dom 1-9 9'
+	assertFalse 'matching_dom 1-9 10'
+	assertFalse 'matching_dom 1-9 30'
+	assertFalse 'matching_dom 1-9 31'
+}
+test_matching_month()
+{
+	assertTrue 'matching_month 1-9 3'
+	assertTrue 'matching_month 1-9 1'
+	assertTrue 'matching_month 1-9 9'
+	assertFalse 'matching_month 1-9 10'
+	assertFalse 'matching_month 1-9 12'
+}
+test_matching_dow()
+{
+	assertTrue 'matching_dow 0-4 0'
+	assertTrue 'matching_dow 0-4 1'
+	assertTrue 'matching_dow 0-4 3'
+	assertTrue 'matching_dow 0-4 4'
+	assertFalse 'matching_dow 0-4 5'
+	assertFalse 'matching_dow 0-4 7'
+
+	assertTrue 'matching_dow 1-4 3'
+	assertTrue 'matching_dow 1-4 1'
+	assertTrue 'matching_dow 1-4 4'
+	assertFalse 'matching_dow 1-4 0'
+	assertFalse 'matching_dow 1-4 5'
+	assertFalse 'matching_dow 1-4 7'
+}
+
+test_run_cmd()
+{
+	rm -f "$__shunit_tmpDir/tmp/envfile"
+	touch "$__shunit_tmpDir/tmp/envfile"
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'touch \"$__shunit_tmpDir/tmp/output\"' ''"
+	assertTrue "[ -e \"$__shunit_tmpDir/tmp/output\" ]"
+}
+test_run_cmd_envfile_set()
+{
+	echo 'FOO bar' >"$__shunit_tmpDir/tmp/envfile"
+	echo 'BAZ quux' >>"$__shunit_tmpDir/tmp/envfile"
+
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$FOO\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals bar "$(cat "$__shunit_tmpDir/tmp/output")"
+
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$BAZ\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals quux "$(cat "$__shunit_tmpDir/tmp/output")"
+}
+test_run_cmd_default_envvars()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$SHELL\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals /bin/sh "$(cat "$__shunit_tmpDir/tmp/output")"
+
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$PATH\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals /usr/bin:/bin "$(cat "$__shunit_tmpDir/tmp/output")"
+
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$HOME\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals "$(echo ~root)" "$(cat "$__shunit_tmpDir/tmp/output")"
+
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$USER\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals root "$(cat "$__shunit_tmpDir/tmp/output")"
+
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$LOGNAME\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals root "$(cat "$__shunit_tmpDir/tmp/output")"
+}
+test_run_cmd_pwd_is_home()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	assertTrue "run_cmd \"$__shunit_tmpDir/tmp/envfile\" root 'echo \"\$(pwd)\" >\"$__shunit_tmpDir/tmp/output\"' ''"
+	assertEquals "$(echo ~root)" "$(cat "$__shunit_tmpDir/tmp/output")"
+}
+test_run_cmd_got_stdout_and_stderr_via_email()
+{
+	rm -f "$__shunit_tmpDir/tmp/envfile"
+	touch "$__shunit_tmpDir/tmp/envfile"
+	rm -f "$__shunit_tmpDir/tmp/output"
+
+	expected='Cron <root@coral> echo to-stdout; echo to-stderr 1>&2
+to-stdout
+to-stderr'
+	assertEquals "$expected" \
+		"$(run_cmd "$__shunit_tmpDir/tmp/envfile" root \
+			'echo to-stdout; echo to-stderr 1>&2' '')"
+}
+
+test_run_from_part()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "$(date '+%M %H * * *') root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		\"$(date '+%M %H %e %m %w')\""
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_reboot()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@reboot root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\" @reboot"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_reboot_job_doesnt_run_at_not_reboot()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@reboot root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		\"$(date '+%M %H %e %m %w')\""
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_annually()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@annually root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_annually_at_not_annually()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@annually root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 2 0'"
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_yearly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@yearly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_yearly_doesnt_run_at_not_yearly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@yearly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 2 0'"
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_monthly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@monthly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_monthly_doesnt_run_at_not_monthly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@monthly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 2 1 0'"
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_weekly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@weekly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_weekly_doesnt_run_at_not_weekly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@weekly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 2'"
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_midnight()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@midnight root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_midnight_doesnt_run_at_not_midnight()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@midnight root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 1 1 1 0'"
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_daily()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@daily root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_daily_doesnt_run_at_not_daily()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@daily root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'5 0 1 1 0'"
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_hourly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@hourly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_hourly_doesnt_run_at_not_hourly()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "@hourly root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'5 0 1 1 0'"
+	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_env_vars()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "MAILTO=root@example.com
+@hourly root echo \"\$MAILTO\" >\"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertEquals root@example.com "$(cat "$__shunit_tmpDir/tmp/output")"
+}
+test_run_from_part_multiple_env_vars()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "MAILTO=root@example.com
+FOO=bar
+@hourly root echo \"\$MAILTO-\$FOO\" >\"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		'0 0 1 1 0'"
+	assertEquals root@example.com-bar "$(cat "$__shunit_tmpDir/tmp/output")"
+}
+
+#suite()
+#{
+#	# Run only these tests.
+#	suite_addTest test_run_cmd_default_envvars
+#}
+
+run_tests()
+{
+	. shunit2
+}
+
+reboot=0
+runtests=0
+while getopts hrt ch; do
+	case $ch in
+	h)
+		echo "Usage: $progname [-hrt]"
+		echo '    -h Display this help message.'
+		echo '    -r The system has just rebooted; run @reboot jobs.'
+		echo '    -t Run built-in automated tests.'
+		exit 0
+		;;
+	r)
+		reboot=1
+		;;
+	t)
+		runtests=1
+		;;
+	esac
+done
+shift $(($OPTIND - 1))
+
+if [ "$runtests" -eq 1 ]; then
+	run_tests
+	exit $?
+fi
+
+if [ "$reboot" -eq 1 ]; then
+	now='@reboot'
+else
+	now=$(date '+%M %H %e %m %w')
+fi
+
+progname=$(basename "$0")
+if ! tmpdir=$(mktemp -dt "$progname.XXXXXXXXXX"); then
+	return 1
+fi
+# We'll be running commands from this directory,
+# so let everyone chdir into it.
+chmod +x "$tmpdir"
+export TMPDIR="$tmpdir"
+trap 'rm -r "$tmpdir"' EXIT
+
+for part in /etc/cron.d/*; do
+	run_from_part "$part" "$now"
+done
