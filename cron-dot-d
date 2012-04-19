@@ -1079,6 +1079,7 @@ run_tests()
 
 reboot=0
 runtests=0
+OPTIND=1
 while getopts hrt ch; do
 	case $ch in
 	h)
