@@ -1109,7 +1109,7 @@ else
 	now=$(date '+%M %H %e %m %w')
 fi
 
-progname=$(basename "$0")
+progname=${0##*/}
 if ! tmpdir=$(mktemp -dt "$progname.XXXXXXXXXX"); then
 	return 1
 fi
