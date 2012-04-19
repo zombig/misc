@@ -47,6 +47,10 @@ translate()
 		[0-9][0-9])
 			# Strip leading zero if present, so later numeric
 			# comparisons don't try to treat this as octal.
+			#
+			# We only match a two-digit number in this case,
+			# so we don't need to worry about multiple leading
+			# zeros.
 			echo "${value#0}"
 			return 0
 			;;
@@ -212,29 +216,59 @@ expand_field()
 		item=${field%%,*}
 
 		# Remove the current item from $field.
-		if echo "$field" | fgrep -q ','; then
+		case $field in
+		*,*)
 			field=${field#*,}
-		else
+			;;
+		*)
 			# No more commas.
 			field=''
-		fi
+		esac
 
 		step=1
-		if echo "$item" | fgrep -q '/'; then
+		case $item in
+		*/*)
 			step=${item#*/}
+			# We sanity check $item later, in the common path
+			# for all single-item (i.e., not range) values.
 			item=${item%/*}
 
-			if ! echo "$step" | grep -q '^[[:digit:]]\{1,\}$'; then
+			# $step must be numeric.
+			case $step in
+			*[!0-9]*|'')
 				echo 1>&2 "$progname: Invalid step: $step"
 				return 1
-			fi
-		fi
+				;;
+			esac
+			;;
+		esac
 
 		if [ "$item" = '*' ]; then
 			item=$all_range
 		fi
 
-		if ! echo "$item" | fgrep -q '-'; then
+		case $item in
+		*-*)
+			if ! echo "$item" | grep -q '^[^-]\{1,\}-[^-]\{1,\}$'; then
+				echo 1>&2 "$progname: Invalid range: $item"
+				return 1
+			fi
+
+			first=${item%-*}
+			if ! first=$(translate "$first" "$type"); then
+				echo 1>&2 "$progname: Invalid value: $first"
+				return 1
+			fi
+
+			last=${item#*-}
+			if ! last=$(translate "$last" "$type"); then
+				echo 1>&2 "$progname: Invalid value: $last"
+				return 1
+			fi
+
+			expand_range "$first" "$last" "$step"
+			;;
+		*)
 			if ! item=$(translate "$item" "$type"); then
 				echo 1>&2 "$progname: Invalid value: $item"
 				return 1
@@ -242,26 +276,7 @@ expand_field()
 
 			echo "$item"
 			continue
-		fi
-
-		if ! echo "$item" | grep -q '^[^-]\{1,\}-[^-]\{1,\}$'; then
-			echo 1>&2 "$progname: Invalid range: $item"
-			return 1
-		fi
-
-		first=${item%-*}
-		if ! first=$(translate "$first" "$type"); then
-			echo 1>&2 "$progname: Invalid value: $first"
-			return 1
-		fi
-
-		last=${item#*-}
-		if ! last=$(translate "$last" "$type"); then
-			echo 1>&2 "$progname: Invalid value: $last"
-			return 1
-		fi
-
-		expand_range "$first" "$last" "$step"
+		esac
 	done
 
 	return 0
