@@ -1097,7 +1097,10 @@ while getopts hrt ch; do
 		;;
 	esac
 done
-shift $(($OPTIND - 1))
+# 'shift 0' fails with 'cannot shift' on Solaris sh(1)
+if [ $OPTIND -gt 1 ]; then
+	shift $(($OPTIND - 1))
+fi
 
 if [ "$runtests" -eq 1 ]; then
 	run_tests
