@@ -110,7 +110,7 @@ for line in p.communicate()[0].split('\n'):
             uts_item.append(chr(int(field[:2], 16)))
             field = field[2:]
 
-if platform.version() == uts_info[3]:
+if platform.version() != uts_info[3]:
     print('A new release of kernel %s is available:' % platform.release())
     print('')
     print('Installed: %s' % uts_info[3])
