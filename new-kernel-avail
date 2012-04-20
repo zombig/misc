@@ -39,6 +39,10 @@ with open('/boot/System.map-%s' % platform.release()) as map:
         addr, symtype, name = line.split()
         if name == 'init_uts_ns':
             break
+    else:
+        sys.stderr.write('Unable to find init_uts_ns symbol in %s\n' %
+            '/boot/System.map-%s' % platform.release())
+        sys.exit(2)
 
 addr = int(addr, 16)
 end_addr = addr + (4 * (__NEW_UTS_LEN + 2))
