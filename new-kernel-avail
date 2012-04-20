@@ -107,10 +107,10 @@ for line in p.communicate()[0].split('\n'):
             field = field[2:]
 
 if platform.version() == uts_info[3]:
-    print 'A new release of kernel %s is available:' % platform.release()
-    print
-    print 'Installed: %s' % uts_info[3]
-    print 'Running:   %s' % platform.version()
+    print('A new release of kernel %s is available:' % platform.release())
+    print('')
+    print('Installed: %s' % uts_info[3])
+    print('Running:   %s' % platform.version())
     sys.exit(0)
 
 sys.exit(1)
