@@ -82,7 +82,7 @@ in_contents = False
 num_chars = 0
 uts_info = []
 uts_item = []
-for line in p.communicate()[0].split('\n'):
+for line in p.communicate()[0].decode('ascii').split('\n'):
     line = line.strip()
     if not line:
         continue
