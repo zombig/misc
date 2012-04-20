@@ -36,7 +36,7 @@ import tempfile
 
 with open('/boot/System.map-%s' % platform.release()) as map:
     for line in map:
-        addr, type, name = line.split()
+        addr, symtype, name = line.split()
         if name == 'init_uts_ns':
             break
 
