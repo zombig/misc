@@ -1,0 +1,116 @@
+#!/usr/bin/python -tt
+
+# new-kernel-avail v1.0 - Determines when a newer kernel is installed
+#   (with the same release) than the one running
+# Copyright (c) 2012, John Morrissey <jwm@horde.net>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, 5th Floor, Boston, MA 02110-1301
+# USA.
+
+# !!!
+# Requires scripts/extract-vmlinux, from the kernel source, and binutils.
+# !!!
+
+# linux/utsname.h
+__NEW_UTS_LEN = 64
+# linux/kref.h, linux/types.h
+SIZEOF_STRUCT_KREF = 4
+
+import platform
+import re
+import subprocess
+import sys
+import tempfile
+
+with open('/boot/System.map-%s' % platform.release()) as map:
+    for line in map:
+        addr, type, name = line.split()
+        if name == 'init_uts_ns':
+            break
+
+addr = int(addr, 16)
+end_addr = addr + (4 * (__NEW_UTS_LEN + 2))
+# Bypass the leading struct kref.
+addr += SIZEOF_STRUCT_KREF
+
+vmlinux = tempfile.NamedTemporaryFile()
+p = subprocess.Popen(['extract-vmlinux', '/boot/vmlinuz-%s' % platform.release()],
+    stdout=subprocess.PIPE)
+vmlinux.write(p.communicate()[0])
+vmlinux.flush()
+
+p = subprocess.Popen(['objdump', '-s',
+    '--start-address', hex(addr).replace('L', ''),
+    '--stop-address', hex(end_addr).replace('L', ''),
+    vmlinux.name], stdout=subprocess.PIPE)
+
+# We're parsing a struct new_utsname, which is in a struct uts_namespace:
+#  14 #define __NEW_UTS_LEN 64
+# [...]
+#  24 struct new_utsname {
+#  25         char sysname[__NEW_UTS_LEN + 1];
+#  26         char nodename[__NEW_UTS_LEN + 1];
+#  27         char release[__NEW_UTS_LEN + 1];
+#  28         char version[__NEW_UTS_LEN + 1];
+#  29         char machine[__NEW_UTS_LEN + 1];
+#  30         char domainname[__NEW_UTS_LEN + 1];
+#  31 };
+# [...]
+#  51 struct uts_namespace {
+#  52         struct kref kref;
+#  53         struct new_utsname name;
+#  54         struct user_namespace *user_ns;
+#  55 };
+
+in_contents = False
+num_chars = 0
+uts_info = []
+uts_item = []
+for line in p.communicate()[0].split('\n'):
+    line = line.strip()
+    if not line:
+        continue
+
+    if 'Contents' in line:
+        in_contents = True
+        continue
+
+    if not in_contents:
+        continue
+
+    hexvalue_fields = re.split(r'\s+', line, 5)[1:-1]
+    for field in hexvalue_fields:
+        while field:
+            num_chars += 1
+            if num_chars % (__NEW_UTS_LEN + 1) == 0:
+                uts_info.append(''.join(uts_item))
+                uts_item = []
+
+            # Skip null bytes.
+            if field[:2] == '00':
+                field = field[2:]
+                continue
+
+            uts_item.append(chr(int(field[:2], 16)))
+            field = field[2:]
+
+if platform.version() == uts_info[3]:
+    print 'A new release of kernel %s is available:' % platform.release()
+    print
+    print 'Installed: %s' % uts_info[3]
+    print 'Running:   %s' % platform.version()
+    sys.exit(0)
+
+sys.exit(1)
