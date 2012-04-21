@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# new-kernel-avail v1.1 - Determines when a newer kernel is installed
+# new-kernel-avail v1.1.1 - Determines when a newer kernel is installed
 #   (with the same release) than the one running
 # Copyright (c) 2012, John Morrissey <jwm@horde.net>
 #
@@ -66,27 +66,28 @@ elif platform.dist()[0] == 'redhat':
 # Is a newer kernel image sitting on disk waiting for a reboot?
 
 # Thanks to Jeff Mahoney <jeffm@jeffreymahoney.com> for this bit.
-with open('/boot/vmlinuz-%s' % platform.release(), 'rb') as vmlinuz:
-    vmlinuz.seek(512)
+vmlinuz = open('/boot/vmlinuz-%s' % platform.release(), 'rb')
+vmlinuz.seek(512)
 
-    # Header
-    # 1 byte = 0xeb
-    # 1 byte = start_of_setup
-    # 4 byte magic = "HdrS"
-    # 2 byte version >= 0x0105
-    # 2x2 byte realmode_swtch = 0, 0
-    # 2 byte start_sys_seg - meaningless, = 0x1000
-    # 2 byte kernel version pointer = kernel_version - 512
-    # 1 byte type of loader
-    ret = struct.unpack('2x4s2H2x2xHB7x', vmlinuz.read(24))
+# Header
+# 1 byte = 0xeb
+# 1 byte = start_of_setup
+# 4 byte magic = "HdrS"
+# 2 byte version >= 0x0105
+# 2x2 byte realmode_swtch = 0, 0
+# 2 byte start_sys_seg - meaningless, = 0x1000
+# 2 byte kernel version pointer = kernel_version - 512
+# 1 byte type of loader
+ret = struct.unpack('2x4s2H2x2xHB7x', vmlinuz.read(24))
 
-    version_offset = ret[3] + 512
-    vmlinuz.seek(version_offset)
-    version_str = vmlinuz.read(100)
-    version_str = version_str[:version_str.index('\0')]
+version_offset = ret[3] + 512
+vmlinuz.seek(version_offset)
+version_str = vmlinuz.read(100)
+version_str = version_str[:version_str.index('\0')]
+vmlinuz.close()
 
-    release, version = version_str.split('#')
-    version = '#%s' % version
+release, version = version_str.split('#')
+version = '#%s' % version
 
 if platform.version() != version:
     print('A new release of kernel %s is available:' % platform.release())
