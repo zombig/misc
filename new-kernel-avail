@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# new-kernel-avail v1.0 - Determines when a newer kernel is installed
+# new-kernel-avail v1.1 - Determines when a newer kernel is installed
 #   (with the same release) than the one running
 # Copyright (c) 2012, John Morrissey <jwm@horde.net>
 #
@@ -19,101 +19,79 @@
 # Foundation, Inc., 51 Franklin Street, 5th Floor, Boston, MA 02110-1301
 # USA.
 
-# !!!
-# Requires scripts/extract-vmlinux, from the kernel source, and binutils.
-# !!!
-
-# linux/utsname.h
-__NEW_UTS_LEN = 64
-# linux/kref.h, linux/types.h
-SIZEOF_STRUCT_KREF = 4
-
 import platform
-import re
-import subprocess
+import struct
 import sys
-import tempfile
 
-with open('/boot/System.map-%s' % platform.release()) as map:
-    for line in map:
-        addr, symtype, name = line.split()
-        if name == 'init_uts_ns':
-            break
-    else:
-        sys.stderr.write('Unable to find init_uts_ns symbol in %s\n' %
-            '/boot/System.map-%s' % platform.release())
-        sys.exit(2)
+# Is a newer kernel package installed?
+if platform.dist()[0] == 'debian':
+    import apt
+    import apt_pkg
 
-addr = int(addr, 16)
-end_addr = addr + (4 * (__NEW_UTS_LEN + 2))
-# Bypass the leading struct kref.
-addr += SIZEOF_STRUCT_KREF
+    running_pkg = 'linux-image-%s' % platform.release()
 
-vmlinux = tempfile.NamedTemporaryFile()
-p = subprocess.Popen(['extract-vmlinux', '/boot/vmlinuz-%s' % platform.release()],
-    stdout=subprocess.PIPE)
-vmlinux.write(p.communicate()[0])
-vmlinux.flush()
+    c = apt.cache.Cache()
+    for pkg in c.get_providing_packages('linux-image'):
+        if not pkg.is_installed:
+            continue
+        if pkg.name == running_pkg:
+            continue
 
-p = subprocess.Popen(['objdump', '-s',
-    '--start-address', hex(addr).replace('L', ''),
-    '--stop-address', hex(end_addr).replace('L', ''),
-    vmlinux.name], stdout=subprocess.PIPE)
+        if apt_pkg.version_compare(pkg.name, running_pkg) < 0:
+            print('A newer kernel package is installed:')
+            print('')
+            print('Installed: %s' % running_pkg)
+            print('Running:   %s' % pkg.name)
+            sys.exit(0)
+elif platform.dist()[0] == 'redhat':
+    import rpm
 
-# We're parsing a struct new_utsname, which is in a struct uts_namespace:
-#  14 #define __NEW_UTS_LEN 64
-# [...]
-#  24 struct new_utsname {
-#  25         char sysname[__NEW_UTS_LEN + 1];
-#  26         char nodename[__NEW_UTS_LEN + 1];
-#  27         char release[__NEW_UTS_LEN + 1];
-#  28         char version[__NEW_UTS_LEN + 1];
-#  29         char machine[__NEW_UTS_LEN + 1];
-#  30         char domainname[__NEW_UTS_LEN + 1];
-#  31 };
-# [...]
-#  51 struct uts_namespace {
-#  52         struct kref kref;
-#  53         struct new_utsname name;
-#  54         struct user_namespace *user_ns;
-#  55 };
+    ts = rpm.TransactionSet()
+    iter = ts.dbMatch('name', 'kernel')
 
-in_contents = False
-num_chars = 0
-uts_info = []
-uts_item = []
-for line in p.communicate()[0].decode('ascii').split('\n'):
-    line = line.strip()
-    if not line:
-        continue
+    cur_ver, cur_release = platform.release().split('-', 2)
 
-    if 'Contents' in line:
-        in_contents = True
-        continue
+    for item in iter:
+        compare = rpm.labelCompare(('1', item['version'], item['release']),
+            ('1', cur_ver, cur_release))
+        if compare <= 0:
+            continue
 
-    if not in_contents:
-        continue
+        print('A newer kernel package is installed:')
+        print('')
+        print('Installed: %s-%s' % (cur_ver, cur_release))
+        print('Running:   %s-%s' % (item['version'], item['release']))
+        sys.exit(0)
 
-    hexvalue_fields = re.split(r'\s+', line, 5)[1:-1]
-    for field in hexvalue_fields:
-        while field:
-            num_chars += 1
-            if num_chars % (__NEW_UTS_LEN + 1) == 0:
-                uts_info.append(''.join(uts_item))
-                uts_item = []
+# Is a newer kernel image sitting on disk waiting for a reboot?
 
-            # Skip null bytes.
-            if field[:2] == '00':
-                field = field[2:]
-                continue
+# Thanks to Jeff Mahoney <jeffm@jeffreymahoney.com> for this bit.
+with open('/boot/vmlinuz-%s' % platform.release(), 'rb') as vmlinuz:
+    vmlinuz.seek(512)
 
-            uts_item.append(chr(int(field[:2], 16)))
-            field = field[2:]
+    # Header
+    # 1 byte = 0xeb
+    # 1 byte = start_of_setup
+    # 4 byte magic = "HdrS"
+    # 2 byte version >= 0x0105
+    # 2x2 byte realmode_swtch = 0, 0
+    # 2 byte start_sys_seg - meaningless, = 0x1000
+    # 2 byte kernel version pointer = kernel_version - 512
+    # 1 byte type of loader
+    ret = struct.unpack('2x4s2H2x2xHB7x', vmlinuz.read(24))
 
-if platform.version() != uts_info[3]:
+    version_offset = ret[3] + 512
+    vmlinuz.seek(version_offset)
+    version_str = vmlinuz.read(100)
+    version_str = version_str[:version_str.index('\0')]
+
+    release, version = version_str.split('#')
+    version = '#%s' % version
+
+if platform.version() != version:
     print('A new release of kernel %s is available:' % platform.release())
     print('')
-    print('Installed: %s' % uts_info[3])
+    print('Installed: %s' % version)
     print('Running:   %s' % platform.version())
     sys.exit(0)
 
