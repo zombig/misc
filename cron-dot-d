@@ -5,6 +5,7 @@
 # Add to /etc/crontab as:
 #   * * * * * root cron-dot-d
 
+# cron-dot-d v1.1
 # Copyright (c) 2012, John Morrissey
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -473,6 +474,23 @@ run_from_part()
 	local minute hour dom month dow user cmd
 	local stdin
 
+	if [ "$now" != @reboot ]; then
+		# Split $now into its components.
+		now_minute=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_hour=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_dom=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_month=${now%%[ 	]*}
+		now=${now#*[ 	]}
+
+		now_dow=$now
+	fi
+
 	if ! envfile=$(mktemp -t 'cmd.XXXXXXXXXX'); then
 		return 1
 	fi
@@ -575,21 +593,6 @@ run_from_part()
 		# We've handled @reboot and environment variable
 		# declarations; the only remaining possibility
 		# is a crontab entry.
-
-		# Split $now into its components.
-		now_minute=${now%%[ 	]*}
-		now=${now#*[ 	]}
-
-		now_hour=${now%%[ 	]*}
-		now=${now#*[ 	]}
-
-		now_dom=${now%%[ 	]*}
-		now=${now#*[ 	]}
-
-		now_month=${now%%[ 	]*}
-		now=${now#*[ 	]}
-
-		now_dow=$now
 
 		# Split $line into its components.
 		minute=${line%%[ 	]*}
@@ -915,6 +918,18 @@ test_run_from_part()
 	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
 		\"$(date '+%M %H %e %m %w')\""
 	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+}
+test_run_from_part_all_matching_jobs_should_run()
+{
+	rm -f "$__shunit_tmpDir/tmp/output"
+	echo "$(date '+%M %H * * *') root touch \"$__shunit_tmpDir/tmp/output\"" \
+		>"$__shunit_tmpDir/tmp/cron-part"
+	echo "$(date '+%M %H * * *') root touch \"$__shunit_tmpDir/tmp/output2\"" \
+		>>"$__shunit_tmpDir/tmp/cron-part"
+	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
+		\"$(date '+%M %H %e %m %w')\""
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
+	assertTrue "[ -e $__shunit_tmpDir/tmp/output2 ]"
 }
 test_run_from_part_reboot()
 {
