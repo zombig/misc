@@ -5,7 +5,7 @@
 # Add to /etc/crontab as:
 #   * * * * * root cron-dot-d
 
-# cron-dot-d v1.1
+# cron-dot-d v1.1.1
 # Copyright (c) 2012, John Morrissey
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -916,7 +916,7 @@ test_run_from_part()
 	echo "$(date '+%M %H * * *') root touch \"$__shunit_tmpDir/tmp/output\"" \
 		>"$__shunit_tmpDir/tmp/cron-part"
 	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
-		\"$(date '+%M %H %e %m %w')\""
+		\"$(date '+%M %H %d %m %w')\""
 	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
 }
 test_run_from_part_all_matching_jobs_should_run()
@@ -927,7 +927,7 @@ test_run_from_part_all_matching_jobs_should_run()
 	echo "$(date '+%M %H * * *') root touch \"$__shunit_tmpDir/tmp/output2\"" \
 		>>"$__shunit_tmpDir/tmp/cron-part"
 	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
-		\"$(date '+%M %H %e %m %w')\""
+		\"$(date '+%M %H %d %m %w')\""
 	assertTrue "[ -e $__shunit_tmpDir/tmp/output ]"
 	assertTrue "[ -e $__shunit_tmpDir/tmp/output2 ]"
 }
@@ -945,7 +945,7 @@ test_run_from_part_reboot_job_doesnt_run_at_not_reboot()
 	echo "@reboot root touch \"$__shunit_tmpDir/tmp/output\"" \
 		>"$__shunit_tmpDir/tmp/cron-part"
 	assertTrue "run_from_part \"$__shunit_tmpDir/tmp/cron-part\"
-		\"$(date '+%M %H %e %m %w')\""
+		\"$(date '+%M %H %d %m %w')\""
 	assertTrue "[ ! -e $__shunit_tmpDir/tmp/output ]"
 }
 test_run_from_part_annually()
@@ -1140,7 +1140,7 @@ fi
 if [ "$reboot" -eq 1 ]; then
 	now='@reboot'
 else
-	now=$(date '+%M %H %e %m %w')
+	now=$(date '+%M %H %d %m %w')
 fi
 
 progname=${0##*/}
