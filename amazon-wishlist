@@ -49,7 +49,7 @@ import re
 import sys
 from time import gmtime, strftime
 from urllib import quote_plus, urlencode
-from urllib2 import Request
+from urllib2 import Request, unquote
 from urlparse import parse_qs, urljoin, urlparse
 from xml.etree.ElementTree import ElementTree
 
@@ -158,6 +158,72 @@ class MclsScraper(object):
 			auth.add_header('User-Agent', 'amazon-wishlist 0.3')
 			locations.extend(self._parse_result(''.join(opener.open(auth).fp.readlines())))
 		return locations
+
+class PlalScraper(object):
+	endpoint = 'http://webcat.cityofpaloalto.org/ipac20/'
+
+	def _parse_result(self, body):
+		parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+		soup = parser.parse(body)
+
+		if soup.find(text=re.compile(r'No Item Information')):
+			return []
+
+		loc_info = (
+			soup.find('a', {'title': 'Location'}).findParent('tr').
+			findNextSiblings('tr')
+		)
+
+		locations = []
+		for row in loc_info:
+			row = row.findAll('a')
+
+			status = row[2].find(text=True)
+			if not re.search(r'^\s*Checked\s+In\s*$', status):
+				continue
+
+			locations.append({
+				'branch': row[0].find(text=True),
+				'call': row[1].find(text=True),
+			})
+
+		return locations
+
+	def get_info(self, title, author):
+		cj.clear()
+		search = Request(
+			'%sipac.jsp?%s' % (
+				self.endpoint,
+				urlencode([
+					('index', '.GW'),
+					('term', '%s %s' % (title, author)),
+				])
+			)
+		)
+		search.add_header('User-Agent', 'amazon-wishlist 0.3')
+		data = opener.open(search)
+		body = ''.join(data.fp.readlines())
+
+		if 'Sorry, could not find anything matching' in body:
+			return []
+
+		if 'Item Information' in body:
+			return self._parse_result(body)
+		else:
+			parser = html5lib.HTMLParser(tree=html5lib.treebuilders.getTreeBuilder("beautifulsoup"))
+			soup = parser.parse(body)
+
+			locations = []
+			for title_link in soup.findAll('a', {'class': 'mediumBoldAnchor'}):
+				link = re.sub(
+					r'^\s*javascript:\s*buildNewList\([\'"]([^\'"]+)[\'"].*',
+					r'\1', title_link['href'])
+				link = unquote(link)
+
+				auth = Request(link)
+				auth.add_header('User-Agent', 'amazon-wishlist 0.3')
+				locations.extend(self._parse_result(''.join(opener.open(auth).fp.readlines())))
+			return locations
 
 class RitScraper(object):
 	def _parse_result(self, body):
@@ -275,6 +341,7 @@ def loadItems(wishlist_id):
 
 	mcls = MclsScraper()
 	rit = RitScraper()
+	plal = PlalScraper()
 
 	body = get_wishlist_body(
 		'http://www.amazon.com/registry/wishlist/%s/ref=cm_wl_sb?reveal=unpurchased&filter=all&sort=date-added&layout=compact' % wishlist_id)
@@ -404,6 +471,16 @@ def loadItems(wishlist_id):
 					'%s %s' % (rit_info[0]['LOCATION'], rit_info[0]['CALL NO.'])
 				this_item['rit']['status'] = rit_info[0]['STATUS']
 
+		try:
+			plal_info = plal.get_info(search_title, this_item.get('by', ''))
+		except Exception, e:
+			print 'Unable to retrieve PLAL info for %s: %s' % (
+				this_item['title'].encode('utf-8'), str(e))
+			plal_info = []
+
+		if len(plal_info) > 0:
+			this_item['plal'] = plal_info
+
 		items.append(this_item)
 
 	return items
@@ -449,6 +526,13 @@ def displayItems(items):
 					'%s (%s, %s)' % (branch, avail['count'], avail['call'])
 					for branch, avail in item['mcls'].iteritems()
 				])
+
+		if 'plal' in item and len(item['plal']) > 0:
+			print 'PLAL: '
+			print ', '.join([
+				'%s (%s)' % (avail['branch'], avail['call'])
+				for avail in item['plal']
+			])
 
 		if 'rit' in item and 'call' in item['rit']:
 			if 'status' in item['rit']:
