@@ -1,7 +1,7 @@
 #!/usr/bin/python -tt
 
-# iTunes -> mobile phone synchronizer v1.0.1
-# Copyright (c) 2010, 2011, John Morrissey <jwm@horde.net>
+# iTunes -> mobile phone synchronizer v1.0.2
+# Copyright (c) 2010-2012, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of Version 2 of the GNU General Public License as
@@ -268,7 +268,7 @@ if 'Podcasts' in args:
 
 for playlist, filemap in sorted(files.items()):
 	if not DRY_RUN:
-		m3u = open(os.path.join(DEST, '%s.m3u' %
+		new_m3u = open(os.path.join(DEST, '%s.new-m3u' %
 			playlist.replace(os.path.sep, '_')), 'w')
 	for src, dest in sorted(filemap.items()):
 		containing_dir = os.path.join(DEST, os.path.dirname(dest))
@@ -277,7 +277,7 @@ for playlist, filemap in sorted(files.items()):
 			os.makedirs(containing_dir)
 
 		if not DRY_RUN:
-			m3u.write('%s\n' % dest)
+			new_m3u.write('%s\n' % dest)
 		dest_full = os.path.join(DEST, dest)
 
 		# If the source and destination size and mtime match,
@@ -310,7 +310,19 @@ for playlist, filemap in sorted(files.items()):
 			print >>sys.stderr
 
 	if not DRY_RUN:
-		m3u.close()
+		new_m3u.close()
+
+		new_m3u_name = new_m3u.name
+		old_m3u_name = new_m3u_name.replace('.new-m3u', '.m3u')
+
+		new_m3u_lines = open(new_m3u_name).readlines()
+		old_m3u_lines = open(old_m3u_name).readlines()
+		if new_m3u_lines == old_m3u_lines:
+			os.unlink(new_m3u_name)
+		else:
+			if VERBOSE:
+				print 'Updating playlist %s...' % playlist
+			os.rename(new_m3u_name, old_m3u_name)
 
 # Build a list of files we want to keep in the destination.
 wanted_dest_files = []
