@@ -1,6 +1,6 @@
 #!/usr/bin/python -tt
 
-# iTunes -> mobile phone synchronizer v1.0.2
+# iTunes -> mobile phone synchronizer v1.1
 # Copyright (c) 2010-2012, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
@@ -41,9 +41,12 @@
 # or two has been played. This is due to a limitation in how iTunes makes
 # the podcast bookmark location available to outside applications.
 
-# Destination directory to sync music to; a mounted directory from your
-# phone, a mounted SD card, etc.
-DEST = '/Path/to/phone/music/directory'
+# Destination directories to sync music to; mounted directories from your
+# phone, mounted SD cards, etc. Music will be split across all directories.
+DEST = [
+	'/Volumes/SD CONTENT/Music',
+	'/Volumes/SD CARD/Music',
+]
 
 # Podcasts to sync. The 'Podcasts' playlist must be specified on the command
 # line as a playlist to sync.
@@ -151,6 +154,9 @@ if len(args) == 0:
 	usage()
 	sys.exit(2)
 
+if isinstance(DEST, (bytes, str, unicode)):
+	DEST = [DEST]
+
 # Normalize the path and remove trailing path separators. Otherwise, the
 # removal algorithm could be confused, since the pathnames we generate (for
 # files we want to keep in DEST) may not exactly match the pathnames we get
@@ -158,9 +164,10 @@ if len(args) == 0:
 #
 # We could use os.path.relpath() in the removal algorithm and avoid having
 # to do this, but relpath() was only introduced in Python 2.6.
-DEST = os.path.normpath(DEST)
-while DEST.endswith(os.path.sep):
-	DEST = DEST[:-1]
+for i in xrange(len(DEST)):
+	DEST[i] = os.path.normpath(DEST[i])
+	while DEST[i].endswith(os.path.sep):
+		DEST[i] = DEST[i][:-1]
 
 if platform.system() == 'Darwin':
 	itunes_root = os.path.join(os.path.expanduser('~'),
@@ -268,17 +275,27 @@ if 'Podcasts' in args:
 
 for playlist, filemap in sorted(files.items()):
 	if not DRY_RUN:
-		new_m3u = open(os.path.join(DEST, '%s.new-m3u' %
+		new_m3u = open(os.path.join(DEST[0], '%s.new-m3u' %
 			playlist.replace(os.path.sep, '_')), 'w')
 	for src, dest in sorted(filemap.items()):
-		containing_dir = os.path.join(DEST, os.path.dirname(dest))
+		file_dir = os.path.dirname(dest)
+
+		# Choose a destination directory based on the first
+		# letter of the album or podcast name.
+		if file_dir.startswith('Podcasts' + os.path.sep):
+			podcast_dir = file_dir[len('Podcasts' + os.path.sep)]
+			dest_dir = DEST[ord(podcast_dir) % len(DEST)]
+		else:
+			dest_dir = DEST[ord(file_dir[0]) % len(DEST)]
+
+		containing_dir = os.path.join(dest_dir, file_dir)
 		if not os.path.exists(containing_dir):
 			print 'Creating intermediate directory %s...' % containing_dir
 			os.makedirs(containing_dir)
 
 		if not DRY_RUN:
 			new_m3u.write('%s\n' % dest)
-		dest_full = os.path.join(DEST, dest)
+		dest_full = os.path.join(dest_dir, dest)
 
 		# If the source and destination size and mtime match,
 		# we probably don't need to call rsync(1).
@@ -337,30 +354,31 @@ for playlist, filemap in sorted(files.items()):
 
 # Walk the destination and remove any files that we don't want to keep
 # (i.e., remove anything in DEST that isn't in wanted_dest_files).
-for path, dirs, files in os.walk(DEST, followlinks=True):
-	for file in files:
-		if file.endswith('.m3u'):
-			continue
-
-		full_path = os.path.join(path, file)
-		relative = full_path.replace(DEST + os.path.sep, '', 1)
-		if relative not in wanted_dest_files:
-			if VERBOSE:
-				print 'Removing old file: %s' % relative
-			if DRY_RUN:
+for dir in DEST:
+	for path, dirs, files in os.walk(dir, followlinks=True):
+		for file in files:
+			if file.endswith('.m3u'):
 				continue
 
-			os.unlink(full_path)
+			full_path = os.path.join(path, file)
+			relative = full_path.replace(dir + os.path.sep, '', 1)
+			if relative not in wanted_dest_files:
+				if VERBOSE:
+					print 'Removing old file: %s' % relative
+				if DRY_RUN:
+					continue
 
-# Finally, prune any empty directories.
-for path, dirs, files in os.walk(DEST, followlinks=True):
-	if len(files) > 0 or len(dirs) > 0:
-		continue
+				os.unlink(full_path)
 
-	relative = path.replace(DEST + os.path.sep, '', 1)
-	if VERBOSE:
-		print 'Removing empty directory: %s' % relative
-	if DRY_RUN:
-		continue
+for dir in DEST:
+	for path, dirs, files in os.walk(dir, followlinks=True):
+		if len(files) > 0 or len(dirs) > 0:
+			continue
 
-	os.rmdir(path)
+		relative = path.replace(dir + os.path.sep, '', 1)
+		if VERBOSE:
+			print 'Removing empty directory: %s' % relative
+		if DRY_RUN:
+			continue
+
+		os.rmdir(path)
