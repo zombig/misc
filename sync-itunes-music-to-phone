@@ -316,8 +316,14 @@ for playlist, filemap in sorted(files.items()):
 		old_m3u_name = new_m3u_name.replace('.new-m3u', '.m3u')
 
 		new_m3u_lines = open(new_m3u_name).readlines()
-		old_m3u_lines = open(old_m3u_name).readlines()
+		if os.path.exists(old_m3u_name):
+			old_m3u_lines = open(old_m3u_name).readlines()
+		else:
+			old_m3u_lines = []
+
 		if new_m3u_lines == old_m3u_lines:
+			if VERBOSE:
+				print 'Playlist %s unchanged.' % playlist
 			os.unlink(new_m3u_name)
 		else:
 			if VERBOSE:
