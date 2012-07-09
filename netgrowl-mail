@@ -1,0 +1,56 @@
+#!/usr/bin/python -tt
+
+# Growl notification for new mail
+# Copyright (c) 2012, John Morrissey <jwm@horde.net>
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of Version 2 of the GNU General Public License as
+# published by the Free Software Foundation
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+# Use this script with a procmail recipe like:
+#
+# :0c:
+# |$HOME/.bin/netgrowl-mail
+#
+# to send Growl notifications to a remote Mac when you receive new mail.
+
+# Requires netgrowl, from http://the.taoofmac.com/space/projects/netgrowl
+
+HOSTS = [
+	'some-remote-host',
+]
+PASSWORD = ''
+
+import email
+import socket
+import sys
+
+import netgrowl
+
+msg = email.message_from_file(sys.stdin)
+payload = msg.get_payload(decode=True).decode(msg.get_content_charset())
+desc = '%s\n%s' % (
+	msg['From'],
+	'\n'.join(payload.split('\n')[0:10]),
+)
+
+for host in HOSTS:
+	addr = (host, netgrowl.GROWL_UDP_PORT)
+	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+	p = netgrowl.GrowlRegistrationPacket(application='mail', password=PASSWORD)
+	p.addNotification()
+	sock.sendto(p.payload(), addr)
+
+	p = netgrowl.GrowlNotificationPacket(password=PASSWORD, application='mail',
+		title=msg['Subject'], description=desc)
+	sock.sendto(p.payload(), addr)
