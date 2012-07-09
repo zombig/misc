@@ -79,7 +79,15 @@ import plistlib
 import stat
 import subprocess
 import sys
-import urllib2
+try:
+	from urllib.parse import unquote
+except ImportError:
+	from urllib2 import unquote
+
+try:
+	maxsize = sys.maxsize
+except AttributeError:
+	maxsize = sys.maxint
 
 try:
 	import appscript
@@ -105,7 +113,7 @@ class MusicLibrary(object):
 	def localTrackName(self, file):
 		if not file.startswith(self.LOCAL_FILE_PREFIX):
 			return file
-		return urllib2.unquote(file).replace(self.LOCAL_FILE_PREFIX, '', 1)
+		return unquote(file).replace(self.LOCAL_FILE_PREFIX, '', 1)
 
 	def playlistNamed(self, name):
 		if 'Playlists' not in self._plist:
@@ -133,7 +141,7 @@ class MusicLibrary(object):
 		]
 
 def usage():
-	print 'Usage: %s [-v|--verbose] PLAYLIST...' % os.path.basename(sys.argv[0])
+	print('Usage: %s [-v|--verbose] PLAYLIST...' % os.path.basename(sys.argv[0]))
 
 try:
 	opts, args = getopt.getopt(sys.argv[1:], 'nv',
@@ -164,7 +172,7 @@ if isinstance(DEST, (bytes, str, unicode)):
 #
 # We could use os.path.relpath() in the removal algorithm and avoid having
 # to do this, but relpath() was only introduced in Python 2.6.
-for i in xrange(len(DEST)):
+for i in range(len(DEST)):
 	DEST[i] = os.path.normpath(DEST[i])
 	while DEST[i].endswith(os.path.sep):
 		DEST[i] = DEST[i][:-1]
@@ -188,9 +196,9 @@ for playlist_name in args:
 
 	tracks = library.tracksInPlaylist(playlist_name)
 	if len(tracks) == 0:
-		print >>sys.stderr, '%s: playlist %s does not exist.' % (
+		sys.stderr.write('%s: playlist %s does not exist.\n' % (
 			os.path.basename(sys.argv[0]), playlist_name,
-		)
+		))
 		sys.exit(1)
 
 	files[playlist_name] = {}
@@ -216,14 +224,14 @@ if 'Podcasts' in args:
 		tracks_by_podcast.setdefault(track['Album'], []).append(track)
 
 	files['Podcasts'] = {}
-	for podcast, tracks in tracks_by_podcast.iteritems():
+	for podcast, tracks in tracks_by_podcast.items():
 		config = PODCASTS[podcast]
 		tracks.sort(reverse=True,
 			key=lambda track: track.get('Release Date', track['Date Added']))
 		matched_num = 0
 
 		for track in tracks:
-			if matched_num >= config.get('num', sys.maxint):
+			if matched_num >= config.get('num', maxsize):
 				break
 
 			file = library.localTrackName(track['Location'])
@@ -290,7 +298,7 @@ for playlist, filemap in sorted(files.items()):
 
 		containing_dir = os.path.join(dest_dir, file_dir)
 		if not os.path.exists(containing_dir):
-			print 'Creating intermediate directory %s...' % containing_dir
+			print('Creating intermediate directory %s...' % containing_dir)
 			os.makedirs(containing_dir)
 
 		if not DRY_RUN:
@@ -308,7 +316,7 @@ for playlist, filemap in sorted(files.items()):
 				continue
 
 		if VERBOSE:
-			print 'Syncing %s...' % dest
+			print('Syncing %s...' % dest)
 		if DRY_RUN:
 			continue
 
@@ -317,14 +325,14 @@ for playlist, filemap in sorted(files.items()):
 			stderr=subprocess.STDOUT)
 		output = proc.communicate()[0]
 		if proc.returncode != 0:
-			print >>sys.stderr, 'Failed to rsync:'
-			print >>sys.stderr, '================'
-			print >>sys.stderr, 'Source: %s' % src
-			print >>sys.stderr, 'Destination: %s' % dest
-			print >>sys.stderr, 'Exit status: %d' % proc.returncode
+			sys.stderr.write('Failed to rsync:\n')
+			sys.stderr.write('================\n')
+			sys.stderr.write('Source: %s\n' % src)
+			sys.stderr.write('Destination: %s\n' % dest)
+			sys.stderr.write('Exit status: %d\n' % proc.returncode)
 			if output:
-				print >>sys.stderr, output
-			print >>sys.stderr
+				sys.stderr.write(output + '\n')
+			sys.stderr.write('\n')
 
 	if not DRY_RUN:
 		new_m3u.close()
@@ -340,11 +348,11 @@ for playlist, filemap in sorted(files.items()):
 
 		if new_m3u_lines == old_m3u_lines:
 			if VERBOSE:
-				print 'Playlist %s unchanged.' % playlist
+				print('Playlist %s unchanged.' % playlist)
 			os.unlink(new_m3u_name)
 		else:
 			if VERBOSE:
-				print 'Updating playlist %s...' % playlist
+				print('Updating playlist %s...' % playlist)
 			os.rename(new_m3u_name, old_m3u_name)
 
 # Build a list of files we want to keep in the destination.
@@ -364,7 +372,7 @@ for dir in DEST:
 			relative = full_path.replace(dir + os.path.sep, '', 1)
 			if relative not in wanted_dest_files:
 				if VERBOSE:
-					print 'Removing old file: %s' % relative
+					print('Removing old file: %s' % relative)
 				if DRY_RUN:
 					continue
 
@@ -377,7 +385,7 @@ for dir in DEST:
 
 		relative = path.replace(dir + os.path.sep, '', 1)
 		if VERBOSE:
-			print 'Removing empty directory: %s' % relative
+			print('Removing empty directory: %s' % relative)
 		if DRY_RUN:
 			continue
 
