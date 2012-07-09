@@ -48,9 +48,15 @@ import json
 import re
 import sys
 from time import gmtime, strftime
-from urllib import quote_plus, urlencode
-from urllib2 import Request, unquote
-from urlparse import parse_qs, urljoin, urlparse
+try:
+	from urllib.parse import quote_plus, urlencode
+	from urllib.request import Request
+	from urllib.parse import unquote
+	from urllib.parse import parse_qs, urljoin, urlparse
+except ImportError:
+	from urllib import quote_plus, urlencode
+	from urllib2 import Request, unquote
+	from urlparse import parse_qs, urljoin, urlparse
 from xml.etree.ElementTree import ElementTree
 
 import html5lib
@@ -254,7 +260,7 @@ class RitScraper(object):
 		for location in items:
 			locinfo = {}
 			cells = location.findAll('td')
-			for pretty, td_index in fields.iteritems():
+			for pretty, td_index in fields.items():
 				value = ''.join(cells[td_index].findAll(
 					text=lambda text: not isinstance(text, BeautifulSoupComment))).strip()
 
@@ -435,9 +441,10 @@ def loadItems(wishlist_id):
 			try:
 				mcls_info = mcls.get_info(type, search_title, search_author)
 				break
-			except Exception, e:
-				print 'Unable to retrieve MCLS info for %s: %s' % (
-					this_item['title'].encode('utf-8'), str(e))
+			except Exception:
+				e = sys.exc_info()[1]
+				print('Unable to retrieve MCLS info for %s: %s' % (
+					this_item['title'].encode('utf-8'), str(e)))
 				mcls_info = []
 
 		branches = {}
@@ -457,9 +464,10 @@ def loadItems(wishlist_id):
 
 		try:
 			rit_info = rit.get_info(None, search_title, this_item.get('by', ''))
-		except Exception, e:
-			print 'Unable to retrieve RIT info for %s: %s' % (
-				this_item['title'].encode('utf-8'), str(e))
+		except Exception:
+			e = sys.exc_info()[1]
+			print('Unable to retrieve RIT info for %s: %s' % (
+				this_item['title'].encode('utf-8'), str(e)))
 			rit_info = []
 
 		if len(rit_info) > 0:
@@ -473,9 +481,10 @@ def loadItems(wishlist_id):
 
 		try:
 			plal_info = plal.get_info(search_title, this_item.get('by', ''))
-		except Exception, e:
-			print 'Unable to retrieve PLAL info for %s: %s' % (
-				this_item['title'].encode('utf-8'), str(e))
+		except Exception:
+			e = sys.exc_info()[1]
+			print('Unable to retrieve PLAL info for %s: %s' % (
+				this_item['title'].encode('utf-8'), str(e)))
 			plal_info = []
 
 		if len(plal_info) > 0:
@@ -492,56 +501,56 @@ def displayItems(items):
 		item = items[i]
 
 		if i % 2 == 0:
-			print '<li class="left">'
+			print('<li class="left">')
 		else:
-			print '<li class="right">'
+			print('<li class="right">')
 
-		print '<a href="%s">' % item['url']
-		print '<img style="float: left" src="%s" height="%s" width="%s" alt="%s">' % (
+		print('<a href="%s">' % item['url'])
+		print('<img style="float: left" src="%s" height="%s" width="%s" alt="%s">' % (
 			item['img']['url'], item['img']['height'],
 			item['img']['width'], item['img']['caption'].encode('utf-8')
-		)
-		print '</a>'
+		))
+		print('</a>')
 
-		print item['title'].encode('utf-8'), '<br>'
+		print(item['title'].encode('utf-8'), '<br>')
 		if 'by' in item:
-			print item['by'].encode('utf-8'), '<br>'
+			print(item['by'].encode('utf-8'), '<br>')
 
-		print 'List:', item['prices']['list'], '<br>'
-		print 'New (%s): %s, Used (%s): %s<br>' % \
+		print('List:', item['prices']['list'], '<br>')
+		print('New (%s): %s, Used (%s): %s<br>' % \
 			(item['prices']['new']['count'], item['prices']['new']['lowest'],
-			 item['prices']['used']['count'], item['prices']['used']['lowest'])
+			 item['prices']['used']['count'], item['prices']['used']['lowest']))
 
 		if 'mcls' in item and len(item['mcls']) > 0:
-			print 'MCLS: '
+			print('MCLS: ')
 			branches = [
 				'%s (%s, %s)' % (branch, avail['count'], avail['call'])
-				for branch, avail in item['mcls'].iteritems()
+				for branch, avail in item['mcls'].items()
 				if branch in BRANCHES
 			]
 			if len(branches) > 0:
-				print ', '.join(branches)
+				print(', '.join(branches))
 			else:
-				print ', '.join([
+				print(', '.join([
 					'%s (%s, %s)' % (branch, avail['count'], avail['call'])
-					for branch, avail in item['mcls'].iteritems()
-				])
+					for branch, avail in item['mcls'].items()
+				]))
 
 		if 'plal' in item and len(item['plal']) > 0:
-			print 'PLAL: '
-			print ', '.join([
+			print('PLAL: ')
+			print(', '.join([
 				'%s (%s)' % (avail['branch'], avail['call'])
 				for avail in item['plal']
-			])
+			]))
 
 		if 'rit' in item and 'call' in item['rit']:
 			if 'status' in item['rit']:
-				print 'RIT: %s, %s' % \
-					(item['rit']['status'], item['rit']['call'])
+				print('RIT: %s, %s' % \
+					(item['rit']['status'], item['rit']['call']))
 			else:
-				print 'RIT: %s' % item['rit']['call']
+				print('RIT: %s' % item['rit']['call'])
 
-		print '</li>'
+		print('</li>')
 
 def sign_amazon_req(key, method, url, qs_dict):
 	parsed_url = urlparse(url)
@@ -561,7 +570,7 @@ def sign_amazon_req(key, method, url, qs_dict):
 
 	return '%s?%s&Signature=%s' % (url, qs, sig)
 
-print '''
+print('''
 <!DOCTYPE html>
 <html>
 <head>
@@ -592,13 +601,13 @@ print '''
 
 <body>
 <ul>
-'''
+''')
 
 items = loadItems(WISHLIST_ID)
 displayItems(items)
 
-print '''
+print('''
 </ul>
 </body>
 </html>
-'''
+''')
