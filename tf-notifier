@@ -210,7 +210,7 @@ NOTIFICATION = [
 ]
 
 import datetime
-from email.Message import Message
+from email.message import Message
 from getopt import getopt, GetoptError
 import os
 from os.path import basename
@@ -223,19 +223,20 @@ from syslog import *
 from time import sleep, time
 
 def usage():
-	print """Usage: %s [-c|--config FILE] [-m|--macro NAME] [LOGFILE]
+	print("""Usage: %s [-c|--config FILE] [-m|--macro NAME] [LOGFILE]
 Watch a TinyFugue log file and send notifications when highlighted text
 is received.
 
     -c, --config       path to .tfrc (~/.tfrc by default)
     -h, --help         display this help and exit
-    -m, --macro=NAME   only pay attention to the specified macros""" % \
-	basename(sys.argv[0])
+    -m, --macro=NAME   only pay attention to the specified macros""" %
+	basename(sys.argv[0]))
 
 try:
 	opts, args = getopt(sys.argv[1:], 'hm:', ['help', 'macro='])
-except GetoptError, e:
-	print >>sys.stderr, str(e)
+except GetoptError:
+	e = sys.exc_info()[1]
+	sys.stderr.write(str(e) + '\n')
 	usage()
 	sys.exit(2)
 
@@ -287,12 +288,13 @@ try:
 				tf_opts, tf_args = getopt(
 					parse_arg_string(re.sub(r'^/def\s', '', line)),
 					'm:n:E:t:h:b:B:p:c:w:T:Fa:P:fiIq1')
-			except GetoptError, e:
+			except GetoptError:
 				# We'd like to be resilient in the face of unknown
 				# arguments (say, if newer versions of tf(1) add
 				# new arguments to /def), but it appears getopt()
 				# doesn't provide a way to do that.
-				print >>sys.stderr, 'Unable to parse /def in %s: %s' % (TFRC, str(e))
+				e = sys.exc_info()[1]
+				sys.stderr.write('Unable to parse /def in %s: %s\n' % (TFRC, str(e)))
 				sys.exit(1)
 			for opt in tf_opts:
 				if opt[0] == '-P':
@@ -313,12 +315,13 @@ try:
 			if pattern and is_highlighted:
 				PATTERNS.append(re.compile(pattern))
 	tfrc.close()
-except Exception, e:
-	print >>sys.stderr, 'Unable to process .tfrc: %s' % str(e)
+except Exception:
+	e = sys.exc_info()[1]
+	sys.stderr.write('Unable to process .tfrc: %s\n' % str(e))
 	sys.exit(1)
 
 if len(args) > 1:
-	print >>sys.stderr, 'Only one TinyFugue log file may be specified.'
+	sys.stderr.write('Only one TinyFugue log file may be specified.\n')
 	usage()
 	sys.exit(1)
 elif len(args) == 1:
@@ -336,8 +339,9 @@ try:
 	
 	# Start looking at the end of the file.
 	file.seek(log_stat[ST_SIZE])
-except OSError, e:
-	print '%s: %s' % (LOG_NAME, str(e))
+except OSError:
+	e = sys.exc_info()[1]
+	print('%s: %s' % (LOG_NAME, str(e)))
 	sys.exit(1)
 
 if os.path.exists(os.path.expanduser('~/.tf-notifierrc')):
@@ -345,9 +349,10 @@ if os.path.exists(os.path.expanduser('~/.tf-notifierrc')):
 		fp = open(os.path.expanduser('~/.tf-notifierrc'))
 		exec(''.join(fp.readlines()))
 		fp.close()
-	except Exception, e:
-		print >>sys.stderr, 'Unable to load configuration file %s: %s' % \
-			(os.path.expanduser('~/.tf-notifierrc'), str(e))
+	except Exception:
+		e = sys.exc_info()[1]
+		sys.stderr.write('Unable to load configuration file %s: %s\n' %
+			(os.path.expanduser('~/.tf-notifierrc'), str(e)))
 		sys.exit(1)
 
 queued = []
@@ -361,27 +366,27 @@ for n in NOTIFICATION:
 			cond_value = when[condition]
 		except TypeError:
 			if condition in ['after', 'before']:
-				print >>sys.stderr, \
-					'%s: "%s" values must have a value to compare against.' % \
-					(condition, basename(sys.argv[0]))
+				sys.stderr.write(
+					'%s: "%s" values must have a value to compare against.\n' %
+					(condition, basename(sys.argv[0])))
 				sys.exit(1)
 
 		if condition in ['after', 'before']:
 			if type(cond_value) not in [datetime.datetime, datetime.time]:
-				print >>sys.stderr, \
-					'%s: "%s" values must be datetime.datetime or datetime.time objects.' % \
-					(condition, basename(sys.argv[0]))
+				sys.stderr.write(
+					'%s: "%s" values must be datetime.datetime or datetime.time objects.\n' %
+					(condition, basename(sys.argv[0])))
 				sys.exit(1)
 
 	if n['method'] == 'smtp':
 		if 'from' not in n:
-			print >>sys.stderr, '%s: "from" is a required configuration item for the smtp method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "from" is a required configuration item for the smtp method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 		if 'to' not in n:
-			print >>sys.stderr, '%s: "to" is a required configuration item for the smtp method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "to" is a required configuration item for the smtp method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 		if 'subject' not in n:
-			print >>sys.stderr, '%s: "subject" is a required configuration item for the smtp method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "subject" is a required configuration item for the smtp method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 
 		try:
@@ -389,18 +394,19 @@ for n in NOTIFICATION:
 			n['msg']['From'] = n['from']
 			n['msg']['To'] = n['to']
 			n['msg']['Subject'] = n['subject']
-		except Exception, e:
-			print >>sys.stderr, 'Unable to initialize smtp: %s' % str(e)
+		except Exception:
+			e = sys.exc_info()[1]
+			sys.stderr.write('Unable to initialize smtp: %s\n' % str(e))
 			sys.exit(1)
 	elif n['method'] == 'growl':
 		if 'title' not in n:
-			print >>sys.stderr, '%s: "title" is a required configuration item for the growl method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "title" is a required configuration item for the growl method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 		if 'host' not in n:
-			print >>sys.stderr, '%s: "host" is a required configuration item for the growl method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "host" is a required configuration item for the growl method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 		if 'password' not in n:
-			print >>sys.stderr, '%s: "password" is a required configuration item for the growl method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "password" is a required configuration item for the growl method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 
 		try:
@@ -415,27 +421,30 @@ for n in NOTIFICATION:
 			addr = (n['host'], GROWL_UDP_PORT)
 			n['sock'] = socket(AF_INET, SOCK_DGRAM)
 			n['sock'].sendto(p.payload(), addr)
-		except Exception, e:
-			print >>sys.stderr, 'Unable to initialize growl: %s' % str(e)
+		except Exception:
+			e = sys.exc_info()[1]
+			sys.stderr.write('Unable to initialize growl: %s\n' % str(e))
+			raise
 			sys.exit(1)
 	elif n['method'] == 'libnotify':
 		if 'title' not in n:
-			print >>sys.stderr, '%s: "title" is a required configuration item for the libnotify method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "title" is a required configuration item for the libnotify method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 
 		try:
 			import pynotify
 			if not pynotify.is_initted():
 				pynotify.init(n['appname'])
-		except Exception, e:
-			print >>sys.stderr, 'Unable to initialize libnotify: %s' % str(e)
+		except Exception:
+			e = sys.exc_info()[1]
+			sys.stderr.write('Unable to initialize libnotify: %s\n' % str(e))
 			sys.exit(1)
 	elif n['method'] == 'prowl':
 		if 'apikey' not in n:
-			print >>sys.stderr, '%s: "apikey" is a required configuration item for the prowl method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "apikey" is a required configuration item for the prowl method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 		if 'title' not in n:
-			print >>sys.stderr, '%s: "title" is a required configuration item for the prowl method.' % basename(sys.argv[0])
+			sys.stderr.write('%s: "title" is a required configuration item for the prowl method.\n' % basename(sys.argv[0]))
 			sys.exit(1)
 
 		try:
@@ -443,11 +452,13 @@ for n in NOTIFICATION:
 			n['prowl'] = Prowl(n['apikey'])
 			try:
 				n['prowl'].verify_key()
-			except Exception, e:
-				print >>sys.stderr, 'Unable to verify Prowl API key: %s' % str(e)
+			except Exception:
+				e = sys.exc_info()[1]
+				sys.stderr.write('Unable to verify Prowl API key: %s\n' % str(e))
 				sys.exit(1)
-		except Exception, e:
-			print >>sys.stderr, 'Unable to initialize prowl: %s' % str(e)
+		except Exception:
+			e = sys.exc_info()[1]
+			sys.stderr.write('Unable to initialize prowl: %s\n' % str(e))
 			sys.exit(1)
 
 openlog(basename(sys.argv[0]), LOG_PID)
@@ -505,7 +516,7 @@ def run_lsof(args):
 	try:
 		lsof = subprocess.Popen(args, stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE)
-		stdout = lsof.communicate()[0]
+		stdout = lsof.communicate()[0].decode(sys.getfilesystemencoding())
 
 		if lsof.returncode < 0:
 			syslog(LOG_ERR,
@@ -515,7 +526,8 @@ def run_lsof(args):
 			syslog(LOG_ERR,
 				'lsof(1) exited with status %d.' % lsof.returncode)
 			return None
-	except OSError, e:
+	except OSError:
+		e = sys.exc_info()[1]
 		syslog(LOG_ERR, 'lsof(1) failed: %s.' % str(e))
 		return None
 
@@ -573,7 +585,7 @@ def is_screen_attached(file=None, pid=None):
 		procs[int(proc['PID'])] = int(proc['PPID'])
 
 	our_pid = os.getpid()
-	for pid, ppid in procs.iteritems():
+	for pid, ppid in procs.items():
 		# We'll have the log open; ignore ourselves.
 		if pid == our_pid:
 			continue
@@ -583,7 +595,7 @@ def is_screen_attached(file=None, pid=None):
 				['screen', '-list', '%s.' % ppid],
 				stdout=subprocess.PIPE,
 				stderr=subprocess.PIPE)
-			stdout = screen.communicate()[0]
+			stdout = screen.communicate()[0].decode(sys.getfilesystemencoding())
 
 			if screen.returncode < 0:
 				syslog(LOG_ERR,
@@ -600,7 +612,8 @@ def is_screen_attached(file=None, pid=None):
 					'Unable to determine whether screen at pid %d is attached; screen(1) exited with status %d.' % (
 					pid, screen.returncode))
 				return None
-		except OSError, e:
+		except OSError:
+			e = sys.exc_info()[1]
 			syslog(LOG_ERR,
 				'Unable to determine whether screen at pid %d is attached: %s' % (
 				pid, str(e)))
@@ -641,7 +654,8 @@ def perform_notifications():
 
 				n['last_sent'] = time()
 				n['lines'] = []
-			except Exception, e:
+			except Exception:
+				e = sys.exc_info()[1]
 				syslog(LOG_ERR,
 					'Unable to send SMTP notification (%d lines): %s' %
 					(len(n['lines']), str(e)))
@@ -657,7 +671,8 @@ def perform_notifications():
 
 				n['last_sent'] = time()
 				n['lines'] = []
-			except Exception, e:
+			except Exception:
+				e = sys.exc_info()[1]
 				syslog(LOG_ERR,
 					'Unable to send growl notification (%d lines): %s' %
 					(len(n['lines']), str(e)))
@@ -674,7 +689,8 @@ def perform_notifications():
 
 				n['last_sent'] = time()
 				n['lines'] = []
-			except Exception, e:
+			except Exception:
+				e = sys.exc_info()[1]
 				syslog(LOG_ERR,
 					'Unable to send libnotify notification (%d lines): %s' %
 					(len(n['lines']), str(e)))
@@ -684,12 +700,13 @@ def perform_notifications():
 					'\n'.join(n['lines']))
 				n['last_sent'] = time()
 				n['lines'] = []
-			except Exception, e:
+			except Exception:
+				e = sys.exc_info()[1]
 				syslog(LOG_ERR,
 					'Unable to send prowl notification (%d lines): %s' %
 					(len(n['lines']), str(e)))
 		elif n['method'] == 'stdout':
-			print '\n'.join(n['lines'])
+			print('\n'.join(n['lines']))
 
 			n['last_sent'] = time()
 			n['lines'] = []
@@ -705,7 +722,8 @@ while True:
 			if log_stat[ST_INO] != log_inode:
 				log_inode = log_stat[ST_INO]
 				file = open(LOG_NAME, 'r')
-		except OSError, e:
+		except OSError:
+			e = sys.exc_info()[1]
 			syslog(LOG_ERR,
 				'Error while checking for %s rotation, retrying: %s' %
 				(LOG_NAME, str(e)))
@@ -747,7 +765,7 @@ while True:
 				notify_instance = sorted([
 					'%s: %s' % (k, v)
 					for k, v
-					 in n.iteritems()
+					 in n.items()
 					 if k not in ['notify_after', 'when', 'lines', 'last_sent']
 				])
 				if notify_instance in seen_instances:
@@ -765,7 +783,8 @@ while True:
 						cond_value = when[condition]
 					except TypeError:
 						cond_value = True
-					except Exception, e:
+					except Exception:
+						e = sys.exc_info()[1]
 						syslog(LOG_ERR,
 							'Unexpected exception when retrieving value for condition %s: %s' %
 							(condition, str(e)))
