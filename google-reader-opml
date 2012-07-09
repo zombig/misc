@@ -33,22 +33,26 @@ import os
 from stat import *
 import sys
 from time import gmtime, strftime
-from urllib2 import HTTPError
+try:
+	from urllib.error import HTTPError
+except ImportError:
+	from urllib2 import HTTPError
 
 import mechanize
 
 def usage():
-	print 'google-reader-opml v1.3'
-	print 'Usage: %s [-h] [-u USER] [-p PASSWORD] OUTPUT-FILE' % os.path.basename(sys.argv[0])
-	print ''
-	print '    -h, --help                    display this help and exit'
-	print '    -u USER, --user=USER          log in as USER'
-	print '    -p PASSWORD, --user=PASSWORD  use password PASSWORD'
+	print('google-reader-opml v1.3')
+	print('Usage: %s [-h] [-u USER] [-p PASSWORD] OUTPUT-FILE' % os.path.basename(sys.argv[0]))
+	print('')
+	print('    -h, --help                    display this help and exit')
+	print('    -u USER, --user=USER          log in as USER')
+	print('    -p PASSWORD, --user=PASSWORD  use password PASSWORD')
 
 try:
 	options = gnu_getopt(sys.argv[1:], 'hu:p:',
 		['help=', 'user=', 'password='])
-except GetoptError, e:
+except GetoptError:
+	e = sys.exc_info()[1]
 	print '%s: %s' % (os.path.basename(sys.argv[0]), str(e))
 	usage()
 	sys.exit(2)
@@ -89,7 +93,8 @@ if DEBUG:
 
 try:
 	br.open('https://www.google.com/accounts/ServiceLogin')
-except HTTPError, e:
+except HTTPError:
+	e = sys.exc_info()[1]
 	sys.exit('%d %s' % (e.code, e.msg))
 if not br.viewing_html():
 	sys.exit('Unable to retrieve HTML for login page, has %s changed?' % host)
@@ -111,7 +116,8 @@ br['Passwd'] = GOOGLE_PASSWORD
 
 try:
 	r = br.submit()
-except HTTPError, e:
+except HTTPError:
+	e = sys.exc_info()[1]
 	sys.exit('%d %s' % (e.code, e.msg))
 
 try:
@@ -122,12 +128,13 @@ try:
 		('If-Modified-Since',
 			strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(lastmod)))
 	]
-except OSError, e:
+except OSError:
 	pass
 
 try:
 	r = br.open('http://www.google.com/reader/subscriptions/export')
-except HTTPError, e:
+except HTTPError:
+	e = sys.exc_info()[1]
 	if e.code == 304:
 		sys.exit()
 	else:
