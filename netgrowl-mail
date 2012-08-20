@@ -37,7 +37,10 @@ import sys
 import netgrowl
 
 msg = email.message_from_file(sys.stdin)
-payload = msg.get_payload(decode=True).decode(msg.get_content_charset())
+if msg.get_content_charset() != None:
+	payload = msg.get_payload(decode=True).decode(msg.get_content_charset())
+else:
+	payload = msg.get_payload()
 desc = '%s\n%s' % (
 	msg['From'],
 	'\n'.join(payload.split('\n')[0:10]),
