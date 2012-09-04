@@ -1,0 +1,82 @@
+#!/usr/bin/python -tt
+
+# Growl notification for new mail, v1.1
+# Copyright (c) 2012, John Morrissey <jwm@horde.net>
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of Version 2 of the GNU General Public License as
+# published by the Free Software Foundation
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+# Use this script with a procmail recipe like:
+#
+# :0c:
+# |$HOME/.bin/growl-mail
+#
+# to send Growl notifications to a remote Mac when you receive new mail.
+
+# For Growl 1.3 and newer, requires the gntp Python module
+#   https://github.com/kfdm/gntp
+#
+# For older versions of Growl, requires the netgrowl Python module
+#   http://the.taoofmac.com/space/projects/netgrowl
+
+HOSTS = [
+	'some-remote-host',
+]
+PASSWORD = ''
+
+import email
+import socket
+import sys
+
+def notify_gntp(title, desc):
+	for host in HOSTS:
+		growl = gntp.notifier.GrowlNotifier(
+			notifications=['Message'], defaultNotifications=['Message'],
+			applicationName='mail', hostname=host, password=PASSWORD, port=23053)
+		growl.register()
+		growl.notify(noteType='Message', title=title, description=desc)
+
+def notify_netgrowl(title, desc):
+	for host in HOSTS:
+		addr = (host, netgrowl.GROWL_UDP_PORT)
+		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+		p = netgrowl.GrowlRegistrationPacket(application='mail', password=PASSWORD)
+		p.addNotification()
+		sock.sendto(p.payload(), addr)
+
+		p = netgrowl.GrowlNotificationPacket(password=PASSWORD, application='mail',
+			title=title, description=desc)
+		sock.sendto(p.payload(), addr)
+
+msg = email.message_from_file(sys.stdin)
+if msg.get_content_charset() != None:
+	payload = msg.get_payload(decode=True).decode(msg.get_content_charset())
+else:
+	payload = msg.get_payload()
+desc = '%s\n%s' % (
+	msg['From'],
+	'\n'.join(payload.split('\n')[0:10]),
+)
+
+args = [msg.get('Subject', '[No Subject]'), desc]
+
+try:
+	import netgrowl
+	notify_netgrowl(*args)
+except ImportError:
+	# List the most modern notification method last (the one we expect
+	# most people to be running), so if its Python bindings aren't present,
+	# the stack trace will reference this module.
+	import gntp.notifier
+	notify_gntp(*args)
