@@ -422,11 +422,11 @@ for n in NOTIFICATION:
 			import gntp.notifier
 			import socket
 
-			growl = gntp.notifier.GrowlNotifier(
+			n['gntp'] = gntp.notifier.GrowlNotifier(
 				notifications=['Message'], defaultNotifications=['Message'],
 				applicationName=n.get('appname', basename(sys.argv[0])),
 				hostname=n['host'], password=n['password'], port=23053)
-			growl.register()
+			n['gntp'].register()
 		except socket.timeout:
 			# Remote host might be unreachable.
 			pass
@@ -697,7 +697,7 @@ def perform_notifications():
 					(len(n['lines']), str(e)))
 		elif n['method'] == 'gntp':
 			try:
-				growl.notify(noteType='Message', title=n['title'],
+				n['gntp'].notify(noteType='Message', title=n['title'],
 					description='\n'.join(n['lines']))
 
 				n['last_sent'] = time()
