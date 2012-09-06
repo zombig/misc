@@ -698,7 +698,7 @@ def perform_notifications():
 		elif n['method'] == 'gntp':
 			try:
 				growl.notify(noteType='Message', title=n['title'],
-				    description='\n'.join(n['lines']))
+					description='\n'.join(n['lines']))
 
 				n['last_sent'] = time()
 				n['lines'] = []
