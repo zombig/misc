@@ -451,7 +451,8 @@ for n in NOTIFICATION:
 				GrowlNotificationPacket
 			from socket import socket, AF_INET, SOCK_DGRAM
 
-			p = GrowlRegistrationPacket(application=n['appname'],
+			p = GrowlRegistrationPacket(
+			    application=n.get('appname', basename(sys.argv[0])),
 				password=n['password'])
 			p.addNotification()
 
@@ -471,7 +472,7 @@ for n in NOTIFICATION:
 		try:
 			import pynotify
 			if not pynotify.is_initted():
-				pynotify.init(n['appname'])
+				pynotify.init(n.get('appname', basename(sys.argv[0])))
 		except Exception:
 			e = sys.exc_info()[1]
 			sys.stderr.write('Unable to initialize libnotify: %s\n' % str(e))
@@ -748,8 +749,8 @@ def perform_notifications():
 					(len(n['lines']), str(e)))
 		elif n['method'] == 'prowl':
 			try:
-				n['prowl'].add(n['appname'], n['title'],
-					'\n'.join(n['lines']))
+				n['prowl'].add(n.get('appname', basename(sys.argv[0])),
+					n['title'], '\n'.join(n['lines']))
 				n['last_sent'] = time()
 				n['lines'] = []
 			except Exception:
