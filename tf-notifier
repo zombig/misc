@@ -433,7 +433,6 @@ for n in NOTIFICATION:
 		except Exception:
 			e = sys.exc_info()[1]
 			sys.stderr.write('Unable to initialize gntp: %s\n' % str(e))
-			raise
 			sys.exit(1)
 	elif n['method'] == 'growl':
 		if 'title' not in n:
@@ -462,7 +461,6 @@ for n in NOTIFICATION:
 		except Exception:
 			e = sys.exc_info()[1]
 			sys.stderr.write('Unable to initialize growl: %s\n' % str(e))
-			raise
 			sys.exit(1)
 	elif n['method'] == 'libnotify':
 		if 'title' not in n:
