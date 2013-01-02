@@ -66,7 +66,16 @@ msg = email.message_from_file(sys.stdin)
 if msg.get_content_charset() != None:
 	payload = msg.get_payload(decode=True).decode(msg.get_content_charset())
 else:
-	payload = msg.get_payload()
+	if msg.is_multipart():
+		for payload in msg.get_payload():
+			if (payload.get_content_maintype() == 'text' and
+			    payload.get_content_subtype() == 'plain'):
+				payload = payload.get_payload(decode=True)
+				break
+	else:
+		payload = msg.get_payload()
+
+payload = payload.replace('\r', '')
 desc = '%s\n%s' % (
 	msg['From'],
 	'\n'.join(payload.split('\n')[0:10]),
