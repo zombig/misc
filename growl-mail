@@ -43,8 +43,11 @@ def notify_gntp(title, desc):
 		growl = gntp.notifier.GrowlNotifier(
 			notifications=['Message'], defaultNotifications=['Message'],
 			applicationName='mail', hostname=host, password=PASSWORD, port=23053)
-		growl.register()
-		growl.notify(noteType='Message', title=title, description=desc)
+		try:
+			growl.register()
+			growl.notify(noteType='Message', title=title, description=desc)
+		except (socket.error, socket.timeout):
+			pass
 
 def notify_netgrowl(title, desc):
 	for host in HOSTS:
