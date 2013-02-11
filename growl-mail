@@ -18,7 +18,7 @@
 
 # Use this script with a procmail recipe like:
 #
-# :0c
+# :0c:
 # |$HOME/.bin/growl-mail
 #
 # to send Growl notifications to a remote Mac when you receive new mail.
