@@ -62,16 +62,28 @@ def notify_netgrowl(title, desc):
 			title=title, description=desc)
 		sock.sendto(p.payload(), addr)
 
+def useful_text_from_multipart(payload):
+	text_content = []
+	for payload in payload.get_payload():
+		if payload.is_multipart():
+			text_content.extend(useful_text_from_multipart(payload))
+			continue
+
+		type = '%s/%s' % (
+			payload.get_content_maintype(),
+			payload.get_content_subtype(),
+		)
+		if type in ['text/plain', 'multipart/signed']:
+			text_content.append(payload.get_payload(decode=True).\
+				decode(payload.get_content_charset()))
+	return text_content	
+
 msg = email.message_from_file(sys.stdin)
 if msg.is_multipart():
-	for payload in msg.get_payload():
-		if (payload.get_content_maintype() == 'text' and
-			payload.get_content_subtype() == 'plain'):
-			payload = payload.get_payload(decode=True).decode(
-			    payload.get_content_charset())
-			break
+	payload = '\n'.join(useful_text_from_multipart(msg))
 elif msg.get_content_charset() != None:
-	payload = msg.get_payload(decode=True).decode(msg.get_content_charset())
+	payload = msg.get_payload(decode=True).\
+		decode(msg.get_content_charset())
 else:
 	payload = msg.get_payload()
 
