@@ -33,9 +33,11 @@ HOSTS = [
 	'some-remote-host',
 ]
 PASSWORD = ''
+HTML_TO_TEXT = ['lynx', '-stdin', '-dump', '-force_html']
 
 import email
 import socket
+import subprocess
 import sys
 
 def notify_gntp(title, desc):
@@ -81,11 +83,21 @@ def useful_text_from_multipart(payload):
 msg = email.message_from_file(sys.stdin)
 if msg.is_multipart():
 	payload = '\n'.join(useful_text_from_multipart(msg))
-elif msg.get_content_charset() != None:
-	payload = msg.get_payload(decode=True).\
-		decode(msg.get_content_charset())
 else:
-	payload = msg.get_payload()
+	if msg.get_content_charset() != None:
+		payload = msg.get_payload(decode=True).\
+			decode(msg.get_content_charset())
+	else:
+		payload = msg.get_payload()
+
+	type = '%s/%s' % (
+		msg.get_content_maintype(),
+		msg.get_content_subtype(),
+	)
+	if type == 'text/html' and HTML_TO_TEXT:
+		proc = subprocess.Popen(HTML_TO_TEXT, stdin=subprocess.PIPE,
+			stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+		payload = proc.communicate(payload)[0]
 
 payload = payload.replace('\r', '')
 desc = '%s\n%s' % (
