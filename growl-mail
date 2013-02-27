@@ -1,7 +1,7 @@
 #!/usr/bin/python -tt
 
-# Growl notification for new mail, v1.1
-# Copyright (c) 2012, John Morrissey <jwm@horde.net>
+# Growl notification for new mail, v1.1.1
+# Copyright (c) 2012-3, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of Version 2 of the GNU General Public License as
@@ -48,7 +48,7 @@ def notify_gntp(title, desc):
 		try:
 			growl.register()
 			growl.notify(noteType='Message', title=title, description=desc)
-		except (socket.error, socket.timeout):
+		except (socket.error, socket.timeout, gntp.errors.NetworkError):
 			pass
 
 def notify_netgrowl(title, desc):
