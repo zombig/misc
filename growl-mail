@@ -106,6 +106,8 @@ desc = '%s\n%s' % (
 )
 
 args = [msg.get('Subject', '[No Subject]'), desc]
+if not args[0]:
+	args[0] = '[No Subject]'
 
 try:
 	import netgrowl
