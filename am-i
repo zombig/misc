@@ -203,20 +203,21 @@ def calService():
 		os.path.basename(sys.argv[0]), EMAIL,
 	))
 
-	feed = calService.svc.GetAllCalendarsFeed()
-	for cal in feed.entry:
-		if cal.title.text != CALENDAR_NAME:
-			continue
-		calService.cal = cal
-
-		if DEBUG:
-			print('Feed timezone: %s' % cal.timezone.value)
-		os.environ['TZ'] = cal.timezone.value
-		time.tzset()
-		break
-	else:
+	calService.cal = [
+		cal
+		for cal
+		 in calService.svc.GetAllCalendarsFeed().entry
+		 if cal.title.text == CALENDAR_NAME
+	]
+	if not calService.cal:
 		raise Exception('Calendar "%s" doesn\'t exist, or your account doesn\'t have access to it.' %
 			CALENDAR_NAME)
+	calService.cal = calService.cal[0]
+
+	if DEBUG:
+		print('Feed timezone: %s' % calService.cal.timezone.value)
+	os.environ['TZ'] = calService.cal.timezone.value
+	time.tzset()
 
 	return calService.svc, calService.cal
 
