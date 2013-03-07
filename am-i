@@ -2,7 +2,7 @@
 from __future__ import with_statement
 
 # am-i, a script to determine whether Google Calendar events currently apply
-# Copyright (c) 2010, 2011, John Morrissey <jwm@horde.net>
+# Copyright (c) 2010-3 John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -114,7 +114,7 @@ import traceback
 
 import atom
 import gdata.calendar
-import gdata.calendar.service
+import gdata.calendar.client
 
 # E-mail address and password for your Google account.
 EMAIL = ''
@@ -194,33 +194,31 @@ def calService():
 	"""Get a Google Calendar service handle."""
 
 	try:
-		return calService.cal
-	except:
+		return calService.svc, calService.cal
+	except AttributeError:
 		pass
 
-	calService.cal = gdata.calendar.service.CalendarService()
-	calService.cal.email = EMAIL
-	calService.cal.password = PASSWORD
-	calService.cal.source = '%s (%s)' % (
+	calService.svc = gdata.calendar.client.CalendarClient()
+	calService.svc.ClientLogin(EMAIL, PASSWORD, '%s (%s)' % (
 		os.path.basename(sys.argv[0]), EMAIL,
-	)
-	calService.cal.ProgrammaticLogin()
+	))
 
-	feed = calService.cal.GetAllCalendarsFeed()
-	for gcal in feed.entry:
-		if gcal.title.text != CALENDAR_NAME:
+	feed = calService.svc.GetAllCalendarsFeed()
+	for cal in feed.entry:
+		if cal.title.text != CALENDAR_NAME:
 			continue
+		calService.cal = cal
 
 		if DEBUG:
-			print('Feed timezone: %s' % gcal.timezone.value)
-		os.environ['TZ'] = gcal.timezone.value
+			print('Feed timezone: %s' % cal.timezone.value)
+		os.environ['TZ'] = cal.timezone.value
 		time.tzset()
 		break
 	else:
 		raise Exception('Calendar "%s" doesn\'t exist, or your account doesn\'t have access to it.' %
 			CALENDAR_NAME)
 
-	return calService.cal
+	return calService.svc, calService.cal
 
 def timezone_offset_string():
 	"""Get the current timezone's offset as a string. For example,
@@ -240,9 +238,9 @@ def timezone_offset_string():
 	)
 
 def get_events(day_start, day_end, weekend_days):
-	cal = calService()
+	svc, cal = calService()
 
-	query = gdata.calendar.service.CalendarEventQuery()
+	query = gdata.calendar.client.CalendarEventQuery()
 	query.max_results = 10000
 	query.singleevents = 'true'
 	query.orderby = 'starttime'
@@ -263,7 +261,9 @@ def get_events(day_start, day_end, weekend_days):
 			query.start_min, query.start_max,
 		))
 
-	feed = cal.CalendarQuery(query)
+	feed = svc.GetCalendarEventFeed(
+		uri=cal.GetLink('http://schemas.google.com/gCal/2005#eventFeed').href,
+		q=query)
 	# 'orderby starttime' yields most recent entries first,
 	# but we want to iterate in chronological order.
 	feed.entry.reverse()
@@ -339,15 +339,15 @@ def expected_return(now, events, trigger_key, who):
 	for event in events:
 		if DEBUG:
 			print('Event: %s, from %s to %s' % (
-				event.title.text, event.when[0].start_time,
-				event.when[0].end_time,
+				event.title.text, event.when[0].start,
+				event.when[0].end,
 			))
 
 		if not eligible_event(event, who, trigger_key):
 			continue
 
-		start = gcal2datetime(event.when[0].start_time)
-		end = gcal2datetime(event.when[0].end_time)
+		start = gcal2datetime(event.when[0].start)
+		end = gcal2datetime(event.when[0].end)
 		if start > return_on or end < return_on:
 			continue
 
@@ -521,7 +521,7 @@ def main(trigger_key, who, success_exec, options):
 
 try:
 	import unittest
-except:
+except ImportError:
 	unittest.TestCase = object
 
 class ExpectedReturnTest(unittest.TestCase):
@@ -569,13 +569,13 @@ class ExpectedReturnTest(unittest.TestCase):
 		self._removeStaleEvents()
 
 	def _removeStaleEvents(self):
-		query = gdata.calendar.service.CalendarEventQuery(
+		query = gdata.calendar.client.CalendarEventQuery(
 			text_query='am-i.testcase')
 		query.max_results = 10000
 		query.orderby = 'starttime'
 
-		cal = calService()
-		feed = cal.CalendarQuery(query)
+		svc = calService()[0]
+		feed = svc.GetCalendarEventFeed(q=query)
 		for event in feed.entry:
 			# We search for events containing this string
 			# in the calendar query, but it doesn't hurt
@@ -584,27 +584,28 @@ class ExpectedReturnTest(unittest.TestCase):
 				continue
 			if DEBUG:
 				print('Removing stale test event %s (%s - %s)' % (
-					event.title.text, event.when[0].start_time,
-					event.when[0].end_time,
+					event.title.text, event.when[0].start,
+					event.when[0].end,
 				))
-			cal.DeleteEvent(event.GetEditLink().href)
+			# Force the delete. Fixed in:
+			# https://code.google.com/p/gdata-python-client/source/detail?r=f98fff494fb89fca12deede00c3567dd589e5f97
+			svc.Delete(event.GetEditLink().href, force=True)
 
 	def _createEvent(self, title, start, end):
 		if DEBUG:
 			print('Creating event %s (%s - %s)' % (title, start, end))
 
-		event = gdata.calendar.CalendarEventEntry()
-		event.title = atom.Title(text=title)
+		event = gdata.calendar.data.CalendarEventEntry()
+		event.title = atom.data.Title(text=title)
 
 		offset_str = timezone_offset_string()
-		event.when.append(gdata.calendar.When(
-			start_time=start.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str,
-			end_time=end.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str
+		event.when.append(gdata.data.When(
+			start=start.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str,
+			end=end.strftime('%Y-%m-%dT%H:%M:%S.000') + offset_str
 		))
 
-		cal = calService()
-		return cal.InsertEvent(event,
-			'/calendar/feeds/default/private/full')
+		svc = calService()[0]
+		return svc.InsertEvent(event)
 
 	def test_all_day_event(self):
 		trigger_key = 'vacation'
