@@ -1,8 +1,8 @@
 #!/usr/bin/python -tt
 
-# TinyFugue notifier v1.5.2
+# TinyFugue notifier v1.5.3
 # Copyright (c) 2008, Matthew J. Ernisse <mernisse@ub3rgeek.net>
-# Copyright (c) 2008-9, 2011, John Morrissey <jwm@horde.net>
+# Copyright (c) 2008-9, 2011, 2013, John Morrissey <jwm@horde.net>
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,6 +29,9 @@
 
 
 # Change history:
+# v1.5.3 (31 Mar 2013):
+# - Update for latest gntp version.
+#
 # v1.5.2 (10 Sep 2011):
 # - Fix before/after comparisons: compare against the current time instead
 #   of always assuming it's midnight.
@@ -427,7 +430,7 @@ for n in NOTIFICATION:
 				applicationName=n.get('appname', basename(sys.argv[0])),
 				hostname=n['host'], password=n['password'], port=23053)
 			n['gntp'].register()
-		except socket.timeout:
+		except gntp.errors.NetworkError:
 			# Remote host might be unreachable.
 			pass
 		except Exception:
@@ -702,7 +705,7 @@ def perform_notifications():
 
 				n['last_sent'] = time()
 				n['lines'] = []
-			except socket.timeout:
+			except gntp.errors.NetworkError:
 				# Remote host might be unreachable.
 				pass
 			except Exception:
