@@ -47,17 +47,17 @@ import hmac
 import json
 import re
 import sys
-from time import gmtime, strftime
+from time import gmtime, sleep, strftime
 try:
 	from urllib.parse import quote_plus, urlencode
 	from urllib.request import Request
 	from urllib.parse import unquote
-	from urllib.parse import parse_qs, urljoin, urlparse
+	from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 except ImportError:
 	from urllib import quote_plus, urlencode
 	from urllib2 import Request, unquote
-	from urlparse import parse_qs, urljoin, urlparse
-from xml.etree.ElementTree import ElementTree
+	from urlparse import parse_qs, urljoin, urlparse, urlunparse
+from xml.etree import ElementTree
 
 import html5lib
 import mechanize
@@ -121,6 +121,8 @@ class MclsScraper(object):
 		return locations
 
 	def get_info(self, type, title, author):
+		return []
+
 		cj.clear()
 		search = Request(
 			'%sDoSearch?%s' % (
@@ -283,6 +285,8 @@ class RitScraper(object):
 		return locations
 
 	def get_info(self, type, title, author):
+		return []
+
 		auth = Request(
 			'http://albert.rit.edu/search/X?t:(%s)+and+a:(%s)&searchscope=3&SORT=A' % \
 			(quote_plus(title), quote_plus(author)))
@@ -310,7 +314,7 @@ class RitScraper(object):
 
 def get_wishlist_body(url):
 	if not url.startswith('http'):
-		url = 'http://www.amazon.com' + url
+		url = 'https://www.amazon.com' + url
 
 	wishlist = Request(url)
 	wishlist.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_6_8) AppleWebKit/535.1 (KHTML, like Gecko) Chrome/14.0.835.186 Safari/535.1')
@@ -322,11 +326,18 @@ def get_wishlist_body(url):
 	return parser.parse(body)
 
 def get_asins(body):
-	list = body.find(attrs={'class': 'compact-items wlrdZeroTable'})
+	items = body.findAll(attrs={'id': re.compile(r'^item_')})
 
 	asins = []
-	for item in list.findAll('tbody'):
-		asins.append(re.sub(r'.*\.', r'', item['name']))
+	for item in items:
+		for link in item.findAll('a', attrs={'href': re.compile(r'/dp/')}):
+			link_url = urlparse(link['href'])
+			if link_url.path in asins:
+				continue
+			asin = re.sub(r'^.*/+dp/+([^/]+)/.*', r'\1', link_url.path)
+			if asin in asins:
+				continue
+			asins.append(asin)
 	return asins
 
 def ele(ns, item, name):
@@ -350,16 +361,30 @@ def loadItems(wishlist_id):
 	plal = PlalScraper()
 
 	body = get_wishlist_body(
-		'http://www.amazon.com/registry/wishlist/%s/ref=cm_wl_sb?reveal=unpurchased&filter=all&sort=date-added&layout=compact' % wishlist_id)
-	asins = []
+		'https://www.amazon.com/registry/wishlist/%s' % wishlist_id)
 	asins = get_asins(body)
 
-	page_links = body.find(attrs={'class': 'pagDiv'}).findAll('a')
-	for link in page_links:
-		page_num = link.find(text=re.compile(r'^\d+$'))
-		if not page_num:
+	last_page = 1
+	last_page_url = None
+	for link in body.find(attrs={'id': 'wishlistPagination'}).findAll('a'):
+		page_url = urlparse(link['href'])
+		qs = parse_qs(page_url.query)
+		if 'page' not in qs:
 			continue
-		asins.extend(get_asins(get_wishlist_body(link['href'])))
+
+		if int(qs['page'][0]) > last_page:
+			last_page = int(qs['page'][0])
+			last_page_url = link['href']
+
+	for page_num in range(2, int(last_page) + 1):
+		page_url = urlparse(last_page_url)
+		qs = parse_qs(page_url.query)
+		qs['page'] = [page_num]
+
+		page_url = list(page_url)
+		page_url[4] = urlencode(dict([(k, qs[k][0]) for k in qs]))
+		page_url = urlunparse(page_url)
+		asins.extend(get_asins(get_wishlist_body(page_url)))
 
 	items = []
 	for asin in asins:
@@ -373,13 +398,15 @@ def loadItems(wishlist_id):
 			'ResponseGroup': 'Medium',
 			'AssociateTag': '0',
 		}
+		sleep(1)
 		url = sign_amazon_req(AWS_SECRET_KEY, 'GET',
 			'http://webservices.amazon.com/onca/xml', qs_dict)
 		auth = Request(url)
 		auth.add_header('User-Agent', 'amazon-wishlist 0.3')
 
-		tree = ElementTree(file=mechanize.urlopen(auth))
-		item = tree.getroot().find('.//{%s}Item' % (AWS_XML_NS))
+		xml = ''.join(mechanize.urlopen(auth).readlines())
+		tree = ElementTree.fromstring(xml)
+		item = tree.find('.//{%s}Item' % (AWS_XML_NS))
 
 		img = ele(AWS_XML_NS, item, 'MediumImage')
 		attrs = ele(AWS_XML_NS, item, 'ItemAttributes')
@@ -513,10 +540,11 @@ def displayItems(items):
 		if 'by' in item:
 			print(item['by'].encode('utf-8'), '<br>')
 
-		print('List:', item['prices']['list'], '<br>')
-		print('New (%s): %s, Used (%s): %s<br>' % \
-			(item['prices']['new']['count'], item['prices']['new']['lowest'],
-			 item['prices']['used']['count'], item['prices']['used']['lowest']))
+		print('List: ', item['prices']['list'], '<br>')
+		if item['prices']['new']['count']:
+			print('New (%s): %s, Used (%s): %s<br>' % \
+				(item['prices']['new']['count'], item['prices']['new']['lowest'],
+				 item['prices']['used']['count'], item['prices']['used']['lowest']))
 
 		if 'mcls' in item and len(item['mcls']) > 0:
 			print('MCLS: ')
