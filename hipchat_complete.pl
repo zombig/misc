@@ -48,27 +48,18 @@
 #
 # 1. Install the HTTP::Message, JSON, and LWP Perl modules.
 #
-# 2. In your irssi config, set your Hipchat channels to be in the chatnet
-#    'bitlbee', or edit the bitlbee conditional in
-#    sig_complete_hipchat_nick().
+# 2. /script load hipchat_completion.pl
 #
-#    servers = (
-#      {
-#        address = "127.0.0.1";
-#        port = "6667";
-#        chatnet = "bitlbee";
-#      },
-#    )
-#    channels = (
-#      { name = "#some-hipchat-chan"; chatnet = "bitlbee"; },
-#    )
-#
-# 3. /script load hipchat_completion.pl
-#
-# 4. Get a Hipchat auth token (hipchat.com -> Account settings -> API
+# 3. Get a Hipchat auth token (hipchat.com -> Account settings -> API
 #    access). In irssi:
 #
 #    /set hipchat_auth_token some-hex-value
+#
+# 4. If your Hipchat server isn't in the "bitlbee" chatnet (the 'chatnet'
+#    parameter in your irssi server list for the IRC server you use to
+#    connect to Hipchat), specify the name of the chatnet:
+#
+#    /set hipchat_chatnet some-chatnet-name
 
 use strict;
 
@@ -115,7 +106,8 @@ sub sig_complete_hipchat_nick {
 
 	my $wi = Irssi::active_win()->{active};
 	return unless ref $wi and $wi->{type} eq 'CHANNEL';
-	return unless $wi->{server}->{chatnet} eq 'bitlbee';
+	return unless $wi->{server}->{chatnet} eq
+		Irssi::settings_get_str('hipchat_chatnet');
 
 	# Reload the nick -> mention name map periodically,
 	# so we pick up new users.
@@ -144,6 +136,7 @@ sub sig_complete_hipchat_nick {
 	} @$complist;
 }
 
-Irssi::settings_add_str('hipchat', 'hipchat_auth_token', '');
+Irssi::settings_add_str('hipchat_complete', 'hipchat_auth_token', '');
+Irssi::settings_add_str('hipchat_complete', 'hipchat_chatnet', 'bitlbee');
 get_hipchat_people();
 Irssi::signal_add('complete word', \&sig_complete_hipchat_nick);
