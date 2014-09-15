@@ -1,7 +1,7 @@
 #!/usr/bin/python -tt
 
-# Growl notification for new mail, v1.1.1
-# Copyright (c) 2012-3, John Morrissey <jwm@horde.net>
+# Growl notification for new mail, v1.1.2
+# Copyright (c) 2012-4, John Morrissey <jwm@horde.net>
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of Version 2 of the GNU General Public License as
@@ -64,40 +64,38 @@ def notify_netgrowl(title, desc):
 			title=title, description=desc)
 		sock.sendto(p.payload(), addr)
 
-def useful_text_from_multipart(payload):
+def useful_text_from_message(payload):
+	if payload.is_multipart():
+		payloads = payload.get_payload()
+	else:
+		payloads = [payload]
+
 	text_content = []
-	for payload in payload.get_payload():
+	for payload in payloads:
 		if payload.is_multipart():
-			text_content.extend(useful_text_from_multipart(payload))
+			text_content.extend(useful_text_from_message(payload))
 			continue
 
-		type = '%s/%s' % (
+		content_type = '%s/%s' % (
 			payload.get_content_maintype(),
 			payload.get_content_subtype(),
 		)
-		if type in ['text/plain', 'multipart/signed']:
-			text_content.append(payload.get_payload(decode=True).\
-				decode(payload.get_content_charset()))
+		if content_type in ['text/plain', 'multipart/signed']:
+			charset = payload.get_content_charset()
+			if not charset:
+				charset = 'UTF-8'
+
+			text_content.append(payload.get_payload(decode=True).
+				decode(charset))
+		elif content_type == 'text/html' and HTML_TO_TEXT:
+			proc = subprocess.Popen(HTML_TO_TEXT,
+				stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+				stderr=subprocess.STDOUT)
+			text_content.append(proc.communicate(payload)[0])
 	return text_content	
 
 msg = email.message_from_file(sys.stdin)
-if msg.is_multipart():
-	payload = '\n'.join(useful_text_from_multipart(msg))
-else:
-	if msg.get_content_charset() != None:
-		payload = msg.get_payload(decode=True).\
-			decode(msg.get_content_charset())
-	else:
-		payload = msg.get_payload()
-
-	type = '%s/%s' % (
-		msg.get_content_maintype(),
-		msg.get_content_subtype(),
-	)
-	if type == 'text/html' and HTML_TO_TEXT:
-		proc = subprocess.Popen(HTML_TO_TEXT, stdin=subprocess.PIPE,
-			stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-		payload = proc.communicate(payload)[0]
+payload = '\n'.join(useful_text_from_message(msg))
 
 payload = payload.replace('\r', '')
 desc = '%s\n%s' % (
