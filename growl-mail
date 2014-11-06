@@ -91,7 +91,8 @@ def useful_text_from_message(payload):
 			proc = subprocess.Popen(HTML_TO_TEXT,
 				stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 				stderr=subprocess.STDOUT)
-			text_content.append(proc.communicate(str(payload))[0])
+			headers, body = str(payload).split('\n\n', 1)
+			text_content.append(proc.communicate(body)[0])
 	return text_content	
 
 msg = email.message_from_file(sys.stdin)
